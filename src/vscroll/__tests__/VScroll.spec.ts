@@ -108,7 +108,10 @@ describe('VScroll', () => {
     const container = wrapper.find('.vscroll')
     ;(container.element as HTMLElement).scrollTop = 4950
     await container.trigger('scroll')
-    IOStub.instance?.callback([], null as unknown as IntersectionObserver)
+    IOStub.instance?.callback(
+      [{ isIntersecting: true }] as unknown as IntersectionObserverEntry[],
+      null as unknown as IntersectionObserver,
+    )
     await nextTick()
     expect(wrapper.emitted('loadMore')?.length).toBe(1)
   })
@@ -118,6 +121,18 @@ describe('VScroll', () => {
     const container = wrapper.find('.vscroll')
     ;(container.element as HTMLElement).scrollTop = 250
     await container.trigger('scroll')
+    expect(wrapper.emitted('loadMore')).toBeUndefined()
+  })
+
+  it('ignores non-intersecting observer entries (initial callback)', async () => {
+    const wrapper = mountVScroll({ props: { intersectionObserver: IOStubCtor } })
+    // 真实 IntersectionObserver observe 后会立即异步回调一次初始 entry；
+    // 哨兵不在视口时应传 isIntersecting:false，组件必须忽略它
+    IOStub.instance?.callback(
+      [{ isIntersecting: false }] as unknown as IntersectionObserverEntry[],
+      null as unknown as IntersectionObserver,
+    )
+    await nextTick()
     expect(wrapper.emitted('loadMore')).toBeUndefined()
   })
 
@@ -181,5 +196,30 @@ describe('VScroll', () => {
     await nextTick()
     expect((wrapper.find('.vscroll').element as HTMLElement).scrollTop).toBe(0)
     expect(wrapper.findAll('.row')[0].text()).toBe('item-0')
+  })
+
+  it('virtualizes against the measured container height without a height prop', async () => {
+    const orig = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 400,
+    })
+    try {
+      const wrapper = mountVScroll({ props: { height: undefined } })
+      await nextTick()
+      const rows = wrapper.findAll('.row')
+      expect(rows).toHaveLength(10) // 400/50 = 8 可见 + 2 overscan（mountVScroll 默认）
+      expect(rows[0].text()).toBe('item-0')
+    } finally {
+      if (orig) Object.defineProperty(HTMLElement.prototype, 'clientHeight', orig)
+    }
+  })
+
+  it('keeps the sentinel rendered when the list is empty (loadMore can refill)', () => {
+    const wrapper = mountVScroll({
+      props: { items: [], intersectionObserver: IOStubCtor },
+      slots: { empty: `<div class="empty">empty</div>` },
+    })
+    expect(wrapper.find('.vscroll-sentinel').exists()).toBe(true)
   })
 })

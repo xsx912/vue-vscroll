@@ -1,11 +1,11 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="T">
 import { computed, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
 import { useVScroll, type ItemSize } from './useVScroll'
 
 const props = withDefaults(
   defineProps<{
     /** 列表数据 */
-    items: unknown[]
+    items: T[]
     /** 每个 item 在滚动方向上的尺寸（px）；函数形式为 v2 动态高度预留 */
     itemSize: ItemSize
     /** 固定高度；不传则撑满父容器 */
@@ -28,7 +28,7 @@ const emit = defineEmits<{
 }>()
 
 defineSlots<{
-  item(props: { item: unknown; index: number }): unknown
+  item(props: { item: T; index: number }): unknown
   header?(): unknown
   footer?(): unknown
   empty?(): unknown
@@ -69,10 +69,10 @@ watch(scrollTop, (value) => {
     containerEl.value.scrollTop = value
   }
 })
-const containerStyle = computed<CSSProperties | undefined>(() =>
+const containerStyle = computed<CSSProperties>(() =>
   props.height != null
     ? { height: typeof props.height === 'number' ? `${props.height}px` : props.height }
-    : undefined,
+    : { height: '100%' },
 )
 const innerStyle = computed<CSSProperties>(() => ({
   height: `${view.value.totalSize}px`,
@@ -110,10 +110,16 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(measure)
     resizeObserver.observe(containerEl.value)
   }
-  // 触底加载哨兵：进入视口即 emit loadMore
+  // 触底加载哨兵：真正进入视口才 emit loadMore
+  // （observe 后的首次异步回调可能带 isIntersecting:false，必须过滤）
   const IORef = props.intersectionObserver ?? globalThis.IntersectionObserver
   if (IORef && sentinelEl.value && containerEl.value) {
-    observer = new IORef(() => emit('loadMore'), { root: containerEl.value })
+    observer = new IORef(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) emit('loadMore')
+      },
+      { root: containerEl.value },
+    )
     observer.observe(sentinelEl.value)
   }
 })
@@ -139,13 +145,13 @@ defineExpose({ scrollToIndex, reset })
         >
           <slot name="item" :item="items[row.index]" :index="row.index" />
         </div>
-        <div
-          ref="sentinelEl"
-          class="vscroll-sentinel"
-          aria-hidden="true"
-        ></div>
       </template>
       <slot v-else name="empty" />
+      <div
+        ref="sentinelEl"
+        class="vscroll-sentinel"
+        aria-hidden="true"
+      ></div>
     </div>
     <slot v-if="loading" name="loading" />
     <slot name="footer" />

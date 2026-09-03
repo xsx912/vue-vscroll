@@ -22,6 +22,12 @@ export interface VScrollRow {
   size: number
 }
 
+/** VScroll 组件通过 ref 暴露的实例方法（对外类型契约） */
+export interface VScrollExpose {
+  scrollToIndex(index: number, align?: 'start' | 'center' | 'end'): void
+  reset(): void
+}
+
 /** 组件消费的视图状态：可渲染窗口 + 总高度 */
 export interface VScrollView {
   rows: VScrollRow[]
