@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "dist",
+    "composite": false
+  },
+  "include": ["src/vscroll/**/*.ts", "src/vscroll/**/*.vue"],
+  "exclude": ["src/vscroll/**/__tests__/**"]
+}

@@ -1,11 +1,42 @@
 {
-  "name": "vue-vscroll",
-  "private": true,
-  "version": "0.0.0",
+  "name": "vue-vscroll-next",
+  "version": "0.1.0",
+  "description": "高性能虚拟滚动列表组件：零运行时依赖，10 万条数据 DOM 恒定、60fps 滚动（Vue 3 + TypeScript）",
   "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "vue",
+    "vue3",
+    "virtual-scroll",
+    "virtual-list",
+    "virtualization",
+    "scroll"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xsx912/vue-vscroll.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/vue-vscroll-next.cjs",
+  "module": "./dist/vue-vscroll-next.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/vue-vscroll-next.js",
+      "require": "./dist/vue-vscroll-next.cjs"
+    },
+    "./style.css": "./dist/vue-vscroll-next.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:lib": "vue-tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts",
     "preview": "vite preview",
     "typecheck": "vue-tsc -b",
     "test": "vitest run",
@@ -14,8 +45,8 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
-  "dependencies": {
-    "vue": "^3.5.41"
+  "peerDependencies": {
+    "vue": "^3.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
@@ -24,8 +55,10 @@
     "jsdom": "^30.0.1",
     "typescript": "^5.9.3",
     "vite": "^8.2.2",
+    "vite-plugin-dts": "^5.1.0",
     "vitepress": "^1.6.4",
     "vitest": "^4.1.11",
+    "vue": "^3.5.41",
     "vue-tsc": "^3.3.11"
   }
 }
