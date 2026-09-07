@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { createSSRApp, nextTick, type Component } from 'vue'
+import { renderToString } from 'vue/server-renderer'
+import { describe, expect, it, vi } from 'vitest'
 import VScroll from '../VScroll.vue'
 
 const items = Array.from({ length: 100 }, (_, i) => ({ id: i, label: `item-${i}` }))
@@ -295,5 +296,97 @@ describe('VScroll · 已知变高（itemSize 传函数）', () => {
     })
     expect(wrapper.find('.empty').exists()).toBe(true)
     expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 0px')
+  })
+})
+
+describe('VScroll · 动态高度骨架（itemSize 缺省，按估算渲染）', () => {
+  function mountDynamic(overrides: { props?: Record<string, unknown> } = {}) {
+    return mount(VScroll, {
+      props: { items, height: 200, overscan: 2, ...(overrides.props ?? {}) },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  it('renders the estimated window and estimated total size (default 40px)', () => {
+    const wrapper = mountDynamic()
+    const rows = wrapper.findAll('.row')
+    expect(rows).toHaveLength(7) // 200/40 = 5 可见 + 2 缓冲
+    expect(rows[0].text()).toBe('item-0')
+    expect(rows[6].text()).toBe('item-6')
+    expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 4000px')
+  })
+
+  it('uses a custom estimatedItemSize', () => {
+    const wrapper = mountDynamic({ props: { estimatedItemSize: 50 } })
+    expect(wrapper.findAll('.row')).toHaveLength(6) // 200/50 = 4 可见 + 2 缓冲
+    expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 5000px')
+  })
+
+  it('shifts the estimated window when scrolled', async () => {
+    const wrapper = mountDynamic()
+    const container = wrapper.find('.vscroll')
+    ;(container.element as HTMLElement).scrollTop = 400
+    await container.trigger('scroll')
+    const rows = wrapper.findAll('.row')
+    expect(rows).toHaveLength(9) // startIndex=10 → 窗口 8..16
+    expect(rows[0].text()).toBe('item-8')
+    expect(rows[8].text()).toBe('item-16')
+  })
+
+  it('scrollToIndex lands on the estimated offsets with all alignments', () => {
+    const wrapper = mountDynamic()
+    const scroll = () => (wrapper.find('.vscroll').element as HTMLElement).scrollTop
+    vmScroll(wrapper).scrollToIndex(50)
+    expect(scroll()).toBe(2000) // 50 * 40
+    vmScroll(wrapper).scrollToIndex(50, 'center')
+    expect(scroll()).toBe(1920) // 2000 - (200-40)/2
+    vmScroll(wrapper).scrollToIndex(50, 'end')
+    expect(scroll()).toBe(1840) // 2000 + 40 - 200
+  })
+
+  it('reset() returns to the top in dynamic mode', async () => {
+    const wrapper = mountDynamic()
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    vmScroll(wrapper).reset()
+    await nextTick()
+    expect((wrapper.find('.vscroll').element as HTMLElement).scrollTop).toBe(0)
+    expect(wrapper.findAll('.row')[0].text()).toBe('item-0')
+  })
+})
+
+describe('VScroll · 模式判定与开发告警', () => {
+  const slot = { item: `<div class="row">{{ item.label }}</div>` }
+
+  it('warns once and lets itemSize win when both itemSize and estimatedItemSize are passed', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const wrapper = mount(VScroll, {
+        props: { items, itemSize: 50, estimatedItemSize: 40, height: 200, overscan: 2 },
+        slots: slot,
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0][0])).toContain('itemSize')
+      expect(wrapper.findAll('.row')).toHaveLength(6) // 固定行高路径：200/50 + 2
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not warn when only one of the two is passed', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      mount(VScroll, { props: { items, itemSize: 50, height: 200, overscan: 2 }, slots: slot })
+      mount(VScroll, { props: { items, estimatedItemSize: 40, height: 200, overscan: 2 }, slots: slot })
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('SSR：itemSize 缺省时服务端渲染不抛错', async () => {
+    const app = createSSRApp(VScroll as unknown as Component, { items, height: 200 })
+    const html = await renderToString(app)
+    expect(html).toContain('vscroll')
   })
 })

@@ -1,13 +1,19 @@
 <script setup lang="ts" generic="T">
-import { computed, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from 'vue'
 import { useVScroll, type ItemSize } from './useVScroll'
+import { clearMeasurements, type Measurements } from './core/measure'
 
 const props = withDefaults(
   defineProps<{
     /** 列表数据 */
     items: T[]
-    /** 每行尺寸（px）：数字 = 固定行高，函数 = 已知变高（按索引） */
-    itemSize: ItemSize
+    /**
+     * 行高来源：数字 = 固定行高，函数 = 已知变高（按索引），
+     * 缺省 = 动态高度（先按估算渲染，测量后接管）
+     */
+    itemSize?: ItemSize
+    /** 动态模式下未测行的估算高度（px，默认 40）；itemSize 存在时被忽略 */
+    estimatedItemSize?: number
     /** 固定高度；不传则撑满父容器 */
     height?: string | number
     /** 视口外缓冲行数 */
@@ -22,6 +28,13 @@ const props = withDefaults(
   }>(),
   { overscan: 5, loading: false },
 )
+
+// 模式判定与开发告警（ADR-0001 双 prop 协议：itemSize 优先）
+if (import.meta.env.DEV && props.itemSize != null && props.estimatedItemSize != null) {
+  console.warn(
+    '[vue-vscroll] itemSize 与 estimatedItemSize 同时传入：itemSize 优先，estimatedItemSize 被忽略',
+  )
+}
 
 const emit = defineEmits<{
   loadMore: []
@@ -48,9 +61,14 @@ const viewportSize = computed(() =>
   props.height != null ? parseSize(props.height) : containerHeight.value,
 )
 
+/** 测量缓存（索引键 → 真实行高）；跨 items 变更保留（ADR-0003），reset() 清空 */
+const measurements = shallowRef<Measurements>(new Map())
+
 const { view, getOffsetForIndex } = useVScroll({
   count: computed(() => props.items.length),
   itemSize: props.itemSize,
+  estimatedItemSize: props.estimatedItemSize,
+  measurements,
   overscan: computed(() => props.overscan),
   scrollTop,
   viewportSize,
@@ -93,10 +111,11 @@ function scrollToIndex(index: number, align: 'start' | 'center' | 'end' = 'start
   if (containerEl.value) containerEl.value.scrollTop = target
 }
 
-/** 回到顶部 */
+/** 回到顶部并清空测量（整批换数据后调用，ADR-0003） */
 function reset() {
   scrollTop.value = 0
   if (containerEl.value) containerEl.value.scrollTop = 0
+  measurements.value = clearMeasurements()
 }
 
 function measure() {
