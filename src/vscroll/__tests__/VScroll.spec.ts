@@ -1,7 +1,7 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { createSSRApp, nextTick, type Component } from 'vue'
 import { renderToString } from 'vue/server-renderer'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VScroll from '../VScroll.vue'
 
 const items = Array.from({ length: 100 }, (_, i) => ({ id: i, label: `item-${i}` }))
@@ -22,7 +22,7 @@ class IOStub {
 
 const IOStubCtor = IOStub as unknown as typeof IntersectionObserver
 
-function vmScroll(wrapper: ReturnType<typeof mountVScroll>) {
+function vmScroll(wrapper: VueWrapper) {
   return wrapper.vm as unknown as {
     scrollToIndex: (index: number, align?: 'start' | 'center' | 'end') => void
     reset: () => void
@@ -388,5 +388,186 @@ describe('VScroll · 模式判定与开发告警', () => {
     const app = createSSRApp(VScroll as unknown as Component, { items, height: 200 })
     const html = await renderToString(app)
     expect(html).toContain('vscroll')
+  })
+})
+
+describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
+  /** 可控的 ResizeObserver 桩：捕获 callback，记录观察目标，由测试手动触发 */
+  class ROStub {
+    static instance: ROStub | null = null
+    callback: ResizeObserverCallback
+    observed: Element[] = []
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback
+      ROStub.instance = this
+    }
+    observe(el: Element) {
+      this.observed.push(el)
+    }
+    unobserve(el: Element) {
+      this.observed = this.observed.filter((e) => e !== el)
+    }
+    disconnect() {
+      this.observed = []
+    }
+  }
+  const ROStubCtor = ROStub as unknown as typeof ResizeObserver
+
+  let rafCallbacks: FrameRequestCallback[]
+  let cancelSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    rafCallbacks = []
+    cancelSpy = vi.fn()
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', cancelSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function flushFrame() {
+    rafCallbacks.splice(0).forEach((cb) => cb(0))
+  }
+
+  function mountDynamicRO() {
+    return mount(VScroll, {
+      props: { items, height: 200, overscan: 2, resizeObserver: ROStubCtor },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  function rowElFor(index: number): Element {
+    const el = ROStub.instance!.observed.find(
+      (e) => e.querySelector('.row')?.textContent === `item-${index}`,
+    )
+    expect(el, `row ${index} should be observed`).toBeTruthy()
+    return el!
+  }
+
+  function fireResize(index: number, height: number) {
+    ROStub.instance!.callback(
+      [
+        { target: rowElFor(index), contentRect: { height } } as unknown as ResizeObserverEntry,
+      ],
+      ROStub.instance as unknown as ResizeObserver,
+    )
+  }
+
+  const innerHeight = (wrapper: ReturnType<typeof mountDynamicRO>) =>
+    wrapper.find('.vscroll-inner').attributes('style') ?? ''
+
+  it('replaces the estimate once a row is measured (layout follows)', async () => {
+    const wrapper = mountDynamicRO()
+    expect(ROStub.instance!.observed).toHaveLength(7) // 窗口 0..6
+    fireResize(0, 100)
+    flushFrame()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4060px') // 4000 - 40 + 100
+    const items = wrapper.findAll('.vscroll-item')
+    expect(items[1].attributes('style')).toContain('top: 100px') // 行 1 让位
+  })
+
+  it('follows when the same row changes again (e.g. content expands)', async () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 100)
+    flushFrame()
+    fireResize(0, 60)
+    flushFrame()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4020px')
+    expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 60px')
+  })
+
+  it('merges same-frame measurements into one commit', async () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 100)
+    fireResize(1, 90)
+    fireResize(2, 80)
+    expect(innerHeight(wrapper)).toContain('height: 4000px') // 帧提交前不生效
+    flushFrame()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4150px') // 4000 + 60 + 50 + 40
+    expect(wrapper.findAll('.vscroll-item')[3].attributes('style')).toContain('top: 270px')
+  })
+
+  it('delta-corrects the scroll position when rows above the anchor are measured', async () => {
+    const wrapper = mountDynamicRO()
+    const container = wrapper.find('.vscroll').element as HTMLElement
+    container.scrollTop = 400
+    await wrapper.find('.vscroll').trigger('scroll')
+    expect(wrapper.findAll('.row')[0].text()).toBe('item-8') // 锚点行 10
+    fireResize(8, 60)
+    fireResize(9, 60)
+    flushFrame()
+    await nextTick()
+    // 上方两行各 +20：锚点行屏幕位置 0 不变
+    expect(container.scrollTop).toBe(440)
+    const anchor = wrapper
+      .findAll('.vscroll-item')
+      .find((el) => el.text().includes('item-10'))!
+    expect(anchor.attributes('style')).toContain('top: 440px')
+  })
+
+  it('does not correct when only the anchor row itself changes', async () => {
+    const wrapper = mountDynamicRO()
+    const container = wrapper.find('.vscroll').element as HTMLElement
+    container.scrollTop = 400
+    await wrapper.find('.vscroll').trigger('scroll')
+    fireResize(10, 80) // 锚点行自身 +40，其上方偏移不变
+    flushFrame()
+    await nextTick()
+    expect(container.scrollTop).toBe(400)
+    const row11 = wrapper
+      .findAll('.vscroll-item')
+      .find((el) => el.text().includes('item-11'))!
+    expect(row11.attributes('style')).toContain('top: 480px')
+  })
+
+  it('keeps measurements after the row scrolls out of the window', async () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 60)
+    flushFrame()
+    await nextTick()
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    vmScroll(wrapper).scrollToIndex(0)
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4020px') // 测量仍在缓存
+    expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 60px')
+  })
+
+  it('cancels the pending frame commit on unmount', () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 100) // 已调度，未提交
+    wrapper.unmount()
+    expect(cancelSpy).toHaveBeenCalled()
+    flushFrame() // 不抛错
+  })
+
+  it('renders estimates without crashing when no ResizeObserver is available', async () => {
+    // jsdom 无全局 ResizeObserver 且不注入 prop：跳过测量、按估算渲染
+    const wrapper = mount(VScroll, {
+      props: { items, height: 200, overscan: 2 },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+    await nextTick()
+    expect(wrapper.findAll('.row')).toHaveLength(7)
+    expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 4000px')
+  })
+
+  it('observes rows mounted after scrolling', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    const observedTexts = ROStub.instance!.observed.map(
+      (el) => el.querySelector('.row')?.textContent,
+    )
+    expect(observedTexts).toContain('item-48') // 新窗口首行进入观察
+    expect(observedTexts).not.toContain('item-0') // 滚出的行停止观察
   })
 })

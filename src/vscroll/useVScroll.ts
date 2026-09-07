@@ -98,12 +98,13 @@ export function useVScroll(opts: UseVScrollOptions) {
   })
 
   /**
-   * 锚定：offsets 重新计算时（数据增删或测量落地），保持当前第一个可见项的屏幕位置不变，
+   * 锚定：offsets 重新计算时（数据增删或测量落地），保持变化前第一个可见项的屏幕位置不变，
    * 用偏移量差修正 scrollTop；列表缩到锚点不存在时钳制到最大滚动位置。
+   * 锚点行必须用旧 offsets 定位：新 offsets 下同一 scrollTop 命中的可能已是别的行。
    */
   watch(offsets, (newOffsets, oldOffsets) => {
     if (!oldOffsets || oldOffsets.length === 0) return
-    const first = startIndex.value
+    const first = findStartIndex(oldOffsets, opts.scrollTop.value)
     if (first >= newOffsets.length - 1) {
       const maxScroll = Math.max(0, newOffsets[newOffsets.length - 1] - opts.viewportSize.value)
       opts.scrollTop.value = Math.min(opts.scrollTop.value, maxScroll)

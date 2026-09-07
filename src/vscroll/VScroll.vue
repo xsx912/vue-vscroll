@@ -25,6 +25,11 @@ const props = withDefaults(
      * 缺省时使用全局 IntersectionObserver，不存在则禁用触底检测
      */
     intersectionObserver?: typeof IntersectionObserver
+    /**
+     * 注入 ResizeObserver 构造器（动态模式行测量/测试用），
+     * 缺省时使用全局 ResizeObserver，不存在则跳过测量（按估算高度渲染）
+     */
+    resizeObserver?: typeof ResizeObserver
   }>(),
   { overscan: 5, loading: false },
 )
@@ -51,7 +56,7 @@ defineSlots<{
 const containerEl = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
 const containerHeight = ref(0)
-let resizeObserver: ResizeObserver | null = null
+let containerObserver: ResizeObserver | null = null
 
 function parseSize(value: string | number): number {
   return typeof value === 'number' ? value : parseFloat(value)
@@ -63,6 +68,93 @@ const viewportSize = computed(() =>
 
 /** 测量缓存（索引键 → 真实行高）；跨 items 变更保留（ADR-0003），reset() 清空 */
 const measurements = shallowRef<Measurements>(new Map())
+
+/** 动态模式判定：itemSize 缺省 */
+const isDynamic = computed(() => props.itemSize == null)
+
+// ---- 行测量（ADR-0002：ResizeObserver 持续观察已渲染行） ----
+
+/** 已渲染行元素（索引 → 元素） */
+const rowEls = new Map<number, HTMLElement>()
+/** 每索引一个稳定 ref 回调，避免重渲染时反复 observe/unobserve 抖动 */
+const rowRefFns = new Map<number, (el: unknown) => void>()
+let rowObserver: ResizeObserver | null = null
+/** 本帧内暂存的测量（索引 → 高度），帧末一次性提交 */
+let pendingMeasurements: Map<number, number> | null = null
+let commitScheduled = false
+let commitRafId: number | null = null
+/** 组件已卸载：微任务降级路径无法取消，提交时跳过 */
+let disposed = false
+
+function bindRowRef(el: unknown, index: number) {
+  const node = (el as HTMLElement | null) ?? null
+  const prev = rowEls.get(index) ?? null
+  if (prev === node) return
+  if (node) {
+    rowEls.set(index, node)
+    rowObserver?.observe(node)
+  } else {
+    rowEls.delete(index)
+    rowRefFns.delete(index)
+    if (prev) rowObserver?.unobserve(prev)
+  }
+  // 同一索引换了节点（罕见）：旧的必须停止观察
+  if (prev && node && prev !== node) {
+    rowObserver?.unobserve(prev)
+  }
+}
+
+/** 模板使用的稳定 ref 回调（函数身份按索引复用，避免每帧 patch 重绑） */
+function rowRefFor(index: number) {
+  let fn = rowRefFns.get(index)
+  if (!fn) {
+    fn = (el: unknown) => bindRowRef(el, index)
+    rowRefFns.set(index, fn)
+  }
+  return fn
+}
+
+function indexOfRow(el: Element): number {
+  for (const [index, node] of rowEls) {
+    if (node === el) return index
+  }
+  return -1
+}
+
+function onRowsResize(entries: ResizeObserverEntry[]) {
+  for (const entry of entries) {
+    const index = indexOfRow(entry.target)
+    if (index < 0) continue
+    const height = Math.round(entry.contentRect.height)
+    ;(pendingMeasurements ??= new Map()).set(index, height)
+  }
+  scheduleCommit()
+}
+
+function scheduleCommit() {
+  if (commitScheduled) return
+  commitScheduled = true
+  if (typeof requestAnimationFrame === 'function') {
+    commitRafId = requestAnimationFrame(commitMeasurements)
+  } else {
+    // 无 rAF 的 DOM 环境：退化为微任务，仍保持帧内合并
+    queueMicrotask(commitMeasurements)
+  }
+}
+
+function commitMeasurements() {
+  commitScheduled = false
+  commitRafId = null
+  const sizes = pendingMeasurements
+  pendingMeasurements = null
+  if (disposed || !sizes || sizes.size === 0) return
+  // 一帧至多提交一次：offsets 至多重建一次；单次克隆 + 批量写入
+  const next = new Map(measurements.value)
+  for (const [index, size] of sizes) {
+    next.set(index, size)
+  }
+  measurements.value = next
+}
 
 const { view, getOffsetForIndex } = useVScroll({
   count: computed(() => props.items.length),
@@ -101,7 +193,8 @@ const itemStyle = (row: { top: number; size: number }): CSSProperties => ({
   top: `${row.top}px`,
   left: 0,
   right: 0,
-  height: `${row.size}px`,
+  // 动态模式不锁行高：内容决定高度，ResizeObserver 测量后接管
+  ...(isDynamic.value ? {} : { height: `${row.size}px` }),
 })
 
 /** 跳转到指定索引（start/center/end 对齐） */
@@ -126,8 +219,18 @@ function measure() {
 onMounted(() => {
   measure()
   if (typeof ResizeObserver !== 'undefined' && props.height == null && containerEl.value) {
-    resizeObserver = new ResizeObserver(measure)
-    resizeObserver.observe(containerEl.value)
+    containerObserver = new ResizeObserver(measure)
+    containerObserver.observe(containerEl.value)
+  }
+  // 动态模式：ResizeObserver 持续观察已渲染行，行高变化自动跟进
+  if (isDynamic.value) {
+    const RO = props.resizeObserver ?? globalThis.ResizeObserver
+    if (RO) {
+      rowObserver = new RO(onRowsResize)
+      for (const node of rowEls.values()) {
+        rowObserver.observe(node)
+      }
+    }
   }
   // 触底加载哨兵：真正进入视口才 emit loadMore
   // （observe 后的首次异步回调可能带 isIntersecting:false，必须过滤）
@@ -144,8 +247,15 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
+  disposed = true
+  containerObserver?.disconnect()
   observer?.disconnect()
+  rowObserver?.disconnect()
+  rowEls.clear()
+  rowRefFns.clear()
+  if (commitRafId != null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(commitRafId)
+  }
 })
 
 defineExpose({ scrollToIndex, reset })
@@ -161,6 +271,7 @@ defineExpose({ scrollToIndex, reset })
           :key="row.index"
           class="vscroll-item"
           :style="itemStyle(row)"
+          :ref="rowRefFor(row.index)"
         >
           <slot name="item" :item="items[row.index]" :index="row.index" />
         </div>
