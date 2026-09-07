@@ -1,12 +1,12 @@
 import { computed, type Ref, watch } from 'vue'
-import { computeWindow, findStartIndex } from './core/window'
+import { computeWindow, computeWindowFromOffsets, findStartIndex } from './core/window'
 
 export type ItemSize = number | ((index: number) => number)
 
 export interface UseVScrollOptions {
   /** 列表条目总数（响应式） */
   count: Ref<number>
-  /** 固定尺寸或按索引取尺寸；函数形式为 v2 动态高度预留 */
+  /** 行高：数字 = 固定行高（既有捷径），函数 = 已知变高（按索引给出） */
   itemSize: ItemSize
   /** 视口外缓冲行数 */
   overscan: Ref<number>
@@ -54,13 +54,23 @@ export function useVScroll(opts: UseVScrollOptions) {
   const startIndex = computed(() => findStartIndex(offsets.value, opts.scrollTop.value))
 
   const view = computed<VScrollView>(() => {
-    const win = computeWindow({
-      count: opts.count.value,
-      itemSize: sizeAt(startIndex.value),
-      viewportSize: opts.viewportSize.value,
-      overscan: opts.overscan.value,
-      startIndex: startIndex.value,
-    })
+    const win =
+      typeof opts.itemSize === 'number'
+        ? // 固定行高保留乘法捷径（v1 路径零改动）
+          computeWindow({
+            count: opts.count.value,
+            itemSize: sizeAt(startIndex.value),
+            viewportSize: opts.viewportSize.value,
+            overscan: opts.overscan.value,
+            startIndex: startIndex.value,
+          })
+        : // 已知变高：窗口由偏移数组二分求出
+          computeWindowFromOffsets({
+            offsets: offsets.value,
+            viewportSize: opts.viewportSize.value,
+            overscan: opts.overscan.value,
+            startIndex: startIndex.value,
+          })
     const rows: VScrollRow[] = []
     for (let i = win.startIndex; i < win.endIndex; i++) {
       rows.push({ index: i, top: offsets.value[i], size: sizeAt(i) })

@@ -6,7 +6,7 @@ const props = withDefaults(
   defineProps<{
     /** 列表数据 */
     items: T[]
-    /** 每个 item 在滚动方向上的尺寸（px）；函数形式为 v2 动态高度预留 */
+    /** 每行尺寸（px）：数字 = 固定行高，函数 = 已知变高（按索引） */
     itemSize: ItemSize
     /** 固定高度；不传则撑满父容器 */
     height?: string | number

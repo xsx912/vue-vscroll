@@ -223,3 +223,77 @@ describe('VScroll', () => {
     expect(wrapper.find('.vscroll-sentinel').exists()).toBe(true)
   })
 })
+
+describe('VScroll · 已知变高（itemSize 传函数）', () => {
+  // 行高由函数给出：30 + (i % 4) * 20 → [30,50,70,90,…]
+  // 累计偏移 offsets = [0,30,80,150,240,270,320,390,480,510,560]，总高 560
+  const varItems = Array.from({ length: 10 }, (_, i) => ({ id: i, label: `item-${i}` }))
+  const sizeAt = (i: number) => 30 + (i % 4) * 20
+
+  function mountVar(
+    overrides: { props?: Record<string, unknown>; slots?: Record<string, string> } = {},
+  ) {
+    return mount(VScroll, {
+      props: { items: varItems, itemSize: sizeAt, height: 200, overscan: 2, ...(overrides.props ?? {}) },
+      slots: { item: `<div class="row">{{ item.label }}</div>`, ...(overrides.slots ?? {}) },
+    })
+  }
+
+  it('renders the non-uniform window with per-row tops and the summed total size', () => {
+    const wrapper = mountVar()
+    const rows = wrapper.findAll('.row')
+    expect(rows).toHaveLength(6) // 200 视口覆盖行 0..3，加 2 行缓冲
+    expect(rows[0].text()).toBe('item-0')
+    expect(rows[5].text()).toBe('item-5')
+    expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 560px')
+    const style = (n: number) => wrapper.findAll('.vscroll-item')[n].attributes('style')
+    expect(style(2)).toContain('top: 80px')
+    expect(style(2)).toContain('height: 70px')
+  })
+
+  it('shifts the window by accumulated offsets when scrolled', async () => {
+    const wrapper = mountVar()
+    const container = wrapper.find('.vscroll')
+    ;(container.element as HTMLElement).scrollTop = 200
+    await container.trigger('scroll')
+    const rows = wrapper.findAll('.row')
+    expect(rows).toHaveLength(8) // startIndex=3 → 窗口 1..8
+    expect(rows[0].text()).toBe('item-1')
+    expect(rows[7].text()).toBe('item-8')
+    expect(wrapper.findAll('.vscroll-item')[0].attributes('style')).toContain('top: 30px')
+  })
+
+  it('scrollToIndex lands on accumulated offsets with start/center/end alignment', () => {
+    const wrapper = mountVar()
+    const scroll = () => (wrapper.find('.vscroll').element as HTMLElement).scrollTop
+    vmScroll(wrapper).scrollToIndex(2) // top=80，未钳制
+    expect(scroll()).toBe(80)
+    vmScroll(wrapper).scrollToIndex(3, 'center') // 150-(200-90)/2=95，未钳制
+    expect(scroll()).toBe(95)
+    vmScroll(wrapper).scrollToIndex(8) // top=480，max=560-200=360 → 钳制
+    expect(scroll()).toBe(360)
+    vmScroll(wrapper).scrollToIndex(8, 'end') // 480+30-200=310
+    expect(scroll()).toBe(310)
+  })
+
+  it('clamps the variable-height window at the last row', async () => {
+    const wrapper = mountVar()
+    const container = wrapper.find('.vscroll')
+    ;(container.element as HTMLElement).scrollTop = 360 // 滚到底：总高 560 − 视口 200
+    await container.trigger('scroll')
+    const rows = wrapper.findAll('.row')
+    expect(rows).toHaveLength(6) // startIndex=6 → 窗口 4..9
+    expect(rows[0].text()).toBe('item-4')
+    expect(rows[5].text()).toBe('item-9')
+    expect(wrapper.findAll('.vscroll-item')[0].attributes('style')).toContain('top: 240px')
+  })
+
+  it('renders the empty slot without crashing when itemSize is a function', () => {
+    const wrapper = mountVar({
+      props: { items: [] },
+      slots: { empty: `<div class="empty">empty</div>` },
+    })
+    expect(wrapper.find('.empty').exists()).toBe(true)
+    expect(wrapper.find('.vscroll-inner').attributes('style')).toContain('height: 0px')
+  })
+})

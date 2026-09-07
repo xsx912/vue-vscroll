@@ -20,6 +20,12 @@ function loadMore() {
     loading.value = false
   }, 600)
 }
+
+// 已知变高：行高由函数给出（40–140px，确定性伪随机），服务端已知行高时零测量
+const varItems = ref(Array.from({ length: 500 }, (_, i) => ({ id: i, label: `卡片 ${i}` })))
+const varEl = ref<VScrollExpose | null>(null)
+const sizeAt = (index: number) => 40 + ((index * 53) % 101)
+const heightClass = (index: number) => (sizeAt(index) > 90 ? 'card-tall' : 'card-short')
 </script>
 
 <template>
@@ -55,6 +61,32 @@ function loadMore() {
       </template>
       <template #footer>
         <div class="list-footer">尾部插槽 · 触底后自动加载</div>
+      </template>
+      <template #empty>
+        <div class="list-empty">没有数据</div>
+      </template>
+    </VScroll>
+
+    <h2>已知变高示例（itemSize 传函数）</h2>
+    <p class="tip">行高由 <code>(index) =&gt; 40 + (index * 53) % 101</code> 直接算出（40–140px），无需测量、零误差</p>
+    <div class="actions">
+      <button @click="varEl?.scrollToIndex(250)">跳到第 250 条</button>
+      <button @click="varEl?.scrollToIndex(250, 'end')">底部对齐跳转</button>
+      <button @click="varEl?.reset()">回到顶部</button>
+    </div>
+    <VScroll
+      ref="varEl"
+      class="demo-list"
+      :items="varItems"
+      :item-size="sizeAt"
+      :height="360"
+      :overscan="5"
+    >
+      <template #item="{ item, index }">
+        <div class="demo-card" :class="heightClass(index)" :style="{ height: `${sizeAt(index)}px` }">
+          <span class="badge">#{{ index }}</span>
+          <span class="content">{{ item.label }}（{{ sizeAt(index) }}px）</span>
+        </div>
       </template>
       <template #empty>
         <div class="list-empty">没有数据</div>
@@ -114,5 +146,20 @@ function loadMore() {
   font-size: 12px;
   width: 48px;
   font-variant-numeric: tabular-nums;
+}
+.demo-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  border-bottom: 1px solid #f0f0f0;
+  overflow: hidden;
+}
+.card-tall {
+  background: #f4faf7;
+}
+.card-short {
+  background: #fff;
 }
 </style>
