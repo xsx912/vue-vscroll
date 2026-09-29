@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import VScroll from '../vscroll/VScroll.vue'
+import VGrid from '../vscroll/VGrid.vue'
 import type { VScrollExpose } from '../vscroll/useVScroll'
+import type { VGridExpose } from '../vscroll/VGrid.vue'
 
 const base = 1000
 const items = ref(Array.from({ length: base }, (_, i) => ({ id: i, label: `消息 ${i}` })))
@@ -58,6 +60,29 @@ function loadEarlier() {
     return { id, self: id % 3 === 0, lines: 1 + ((Math.abs(id) * 7) % 3), text: `更早的消息 ${id}` }
   })
   chatItems.value = [...earlier, ...chatItems.value]
+}
+
+// 虚拟表格：10 万行 × 3 列，行虚拟化 + sticky 表头 + 触底加载
+const gridColumns = [240, 160, 120]
+const gridRows = ref(
+  Array.from({ length: 100_000 }, (_, i) => ({ id: i, name: `名称 ${i}`, score: (i * 7) % 100 })),
+)
+const gridEl = ref<VGridExpose | null>(null)
+const gridLoading = ref(false)
+function gridLoadMore() {
+  if (gridLoading.value) return
+  gridLoading.value = true
+  setTimeout(() => {
+    const base = gridRows.value.length
+    gridRows.value.push(
+      ...Array.from({ length: 1000 }, (_, i) => ({
+        id: base + i,
+        name: `名称 ${base + i}`,
+        score: ((base + i) * 7) % 100,
+      })),
+    )
+    gridLoading.value = false
+  }, 500)
 }
 </script>
 
@@ -149,6 +174,41 @@ function loadEarlier() {
         </div>
       </template>
     </VScroll>
+
+    <h2>虚拟表格示例（VGrid · 10 万行）</h2>
+    <p class="tip">行虚拟化 + sticky 表头；列宽 <code>[240, 160, 120]</code>，总宽超出容器时横向滚动；滚动到底自动加载</p>
+    <div class="actions">
+      <button @click="gridEl?.scrollToRow(50_000)">跳到第 50000 行</button>
+      <button @click="gridEl?.reset()">回到顶部</button>
+    </div>
+    <VGrid
+      ref="gridEl"
+      class="demo-grid"
+      :rows="gridRows"
+      :columns="gridColumns"
+      :row-size="44"
+      :height="400"
+      :overscan="5"
+      :loading="gridLoading"
+      @load-more="gridLoadMore"
+    >
+      <template #header>
+        <div class="g-th" :style="{ width: gridColumns[0] + 'px' }">名称</div>
+        <div class="g-th" :style="{ width: gridColumns[1] + 'px' }">分数</div>
+        <div class="g-th" :style="{ width: gridColumns[2] + 'px' }">操作</div>
+      </template>
+      <template #cell="{ item, column }">
+        <span v-if="column === 0" class="g-name">#{{ item.id }} {{ item.name }}</span>
+        <span v-else-if="column === 1" class="g-score">{{ item.score }}</span>
+        <button v-else class="g-op">编辑</button>
+      </template>
+      <template #loading>
+        <div class="list-loading">加载中…</div>
+      </template>
+      <template #empty>
+        <div class="list-empty">没有数据</div>
+      </template>
+    </VGrid>
   </div>
 </template>
 
@@ -243,5 +303,43 @@ function loadEarlier() {
   font-size: 13px;
   line-height: 20px;
   color: #333;
+}
+.demo-grid {
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+.g-th {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+  box-sizing: border-box;
+}
+.g-name,
+.g-score {
+  padding: 0 16px;
+  font-size: 13px;
+  line-height: 44px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  box-sizing: border-box;
+}
+.g-score {
+  color: #42b883;
+  font-variant-numeric: tabular-nums;
+}
+.g-op {
+  margin-left: 16px;
+  padding: 4px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
 }
 </style>

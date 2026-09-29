@@ -1,13 +1,14 @@
 # vue-vscroll
 
-高性能虚拟滚动列表组件（Vue 3 + TypeScript）。在只渲染可视区 + 缓冲行的前提下，用占位撑起滚动条真实总高，10 万条数据保持 DOM 节点数有界、60fps 滚动。
+高性能虚拟滚动组件库（Vue 3 + TypeScript）：虚拟列表 `VScroll` + 虚拟表格 `VGrid`。只渲染可视区 + 缓冲行的前提下，用占位撑起滚动条真实总高，10 万条数据保持 DOM 节点数有界、60fps 滚动。
 
 - **零运行时依赖**：核心算法与组件只依赖 Vue 本身
-- **三种行高模式**：`itemSize` 传数字 = 固定行高，传函数 = 已知变高，缺省 = 动态高度（ResizeObserver 实测 + 估算渲染 + 测量缓存）
+- **虚拟列表三种行高模式**：`itemSize` 传数字 = 固定行高，传函数 = 已知变高，缺省 = 动态高度（ResizeObserver 实测 + 估算渲染 + 测量缓存）
+- **虚拟表格 VGrid**：行虚拟化 + 列固定宽 + sticky 表头，10 万行表格开箱即用
 - **身份键测量**：`getItemKey` 提供时整批替换/重排数据测量自动跟随，无需 `reset()`
-- **完整插槽集**：`item` / `header` / `footer` / `empty` / `loading`
-- **触底加载**：IntersectionObserver 哨兵，滚动到底自动 `loadMore`
-- **程序化定位**：`scrollToIndex`（start/center/end 对齐）；动态模式下为两阶段跳转——先落估算位置，测量落地后自动修正
+- **完整插槽集**：`item` / `cell` / `header` / `footer` / `empty` / `loading`
+- **触底加载**：IntersectionObserver 哨兵，滚动到底自动 `loadMore`（列表/表格共用）
+- **程序化定位**：`scrollToIndex` / `scrollToRow`（start/center/end 对齐）；动态模式下两阶段跳转——先落估算位置，测量落地后自动修正
 - **钉底**：`stickToBottom`（聊天场景）——贴底时尾部追加仍贴底，测量落地继续贴新底；上滚即退出，滚回恢复
 - **头部插入锚定**：向上加载历史——纯头部插入按块高修正，当前视图不动（动态模式配 `getItemKey`，定高免键）
 - **数据变更锚定**：列表增删或测量落地时保持可视位置不跳动
@@ -113,6 +114,7 @@ npm run build:lib  # 库构建（ESM/CJS + d.ts）
 
 ## 路线图
 
-- [ ] 横向滚动 / 网格多列
+- [ ] 横向虚拟化（宽表百列级场景）
+- [ ] 网格动态行高（行内容聚合测量）
 - [ ] SSR 安全（当前仅保证不崩，完整支持待做）
 - [ ] 无障碍语义（role/aria 治理）

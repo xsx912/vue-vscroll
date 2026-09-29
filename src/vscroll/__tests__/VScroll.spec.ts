@@ -3,24 +3,10 @@ import { createSSRApp, nextTick, type Component } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VScroll from '../VScroll.vue'
+import { IOStub, IOStubCtor } from './stubs'
 
 const items = Array.from({ length: 100 }, (_, i) => ({ id: i, label: `item-${i}` }))
 const items200 = Array.from({ length: 200 }, (_, i) => ({ id: i, label: `item-${i}` }))
-
-/** 可控的 IntersectionObserver 桩：捕获回调，由测试手动触发 */
-class IOStub {
-  static instance: IOStub | null = null
-  callback: IntersectionObserverCallback
-  constructor(callback: IntersectionObserverCallback) {
-    this.callback = callback
-    IOStub.instance = this
-  }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-const IOStubCtor = IOStub as unknown as typeof IntersectionObserver
 
 function vmScroll(wrapper: VueWrapper) {
   return wrapper.vm as unknown as {

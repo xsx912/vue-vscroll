@@ -1,6 +1,8 @@
 <script setup lang="ts" generic="T">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from 'vue'
 import { useVScroll, type Align, type ItemSize } from './useVScroll'
+import { useLoadMoreSentinel } from './useLoadMore'
+import { useContainerViewport } from './useContainerViewport'
 import {
   clearMeasurements,
   setMeasurements,
@@ -76,16 +78,11 @@ defineSlots<{
 
 const containerEl = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
-const containerHeight = ref(0)
-let containerObserver: ResizeObserver | null = null
 
-function parseSize(value: string | number): number {
-  return typeof value === 'number' ? value : parseFloat(value)
-}
-
-const viewportSize = computed(() =>
-  props.height != null ? parseSize(props.height) : containerHeight.value,
-)
+const viewportSize = useContainerViewport({
+  container: containerEl,
+  fixedHeight: () => props.height,
+})
 
 /** 测量缓存（索引键 → 真实行高）；跨 items 变更保留（ADR-0003），reset() 清空 */
 const measurements = shallowRef<Measurements>(new Map())
@@ -232,7 +229,13 @@ const { view, beginJump, cancelJump, sizeAt } = useVScroll({
 sizeAtFn = sizeAt
 
 const sentinelEl = ref<HTMLElement | null>(null)
-let observer: IntersectionObserver | null = null
+
+useLoadMoreSentinel({
+  root: containerEl,
+  sentinel: sentinelEl,
+  ioCtor: props.intersectionObserver,
+  onLoadMore: () => emit('loadMore'),
+})
 
 function onScroll(event: Event) {
   const el = event.target as HTMLElement
@@ -285,21 +288,11 @@ function reset() {
   measurements.value = clearMeasurements()
 }
 
-function measure() {
-  if (props.height != null) return
-  containerHeight.value = containerEl.value?.clientHeight ?? 0
-}
-
 onMounted(() => {
-  measure()
   // 钉底：挂载时已有内容（聊天历史）则初始定位到底部；
   // 动态模式下这次跳转走两阶段，测量落地后自动贴到真实底部
   if (props.stickToBottom && props.items.length > 0) {
     scrollToIndex(props.items.length - 1, 'end')
-  }
-  if (typeof ResizeObserver !== 'undefined' && props.height == null && containerEl.value) {
-    containerObserver = new ResizeObserver(measure)
-    containerObserver.observe(containerEl.value)
   }
   // 动态模式：ResizeObserver 持续观察已渲染行，行高变化自动跟进
   if (isDynamic.value) {
@@ -311,24 +304,10 @@ onMounted(() => {
       }
     }
   }
-  // 触底加载哨兵：真正进入视口才 emit loadMore
-  // （observe 后的首次异步回调可能带 isIntersecting:false，必须过滤）
-  const IORef = props.intersectionObserver ?? globalThis.IntersectionObserver
-  if (IORef && sentinelEl.value && containerEl.value) {
-    observer = new IORef(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) emit('loadMore')
-      },
-      { root: containerEl.value },
-    )
-    observer.observe(sentinelEl.value)
-  }
 })
 
 onBeforeUnmount(() => {
   disposed = true
-  containerObserver?.disconnect()
-  observer?.disconnect()
   rowObserver?.disconnect()
   rowEls.clear()
   rowRefFns.clear()
