@@ -25,3 +25,6 @@ dist-ssr
 
 # GUI test artifacts
 gui-test-screenshots/
+
+# Local issue tracker (to-tickets local mode)
+.scratch/
