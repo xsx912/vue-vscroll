@@ -1,6 +1,6 @@
 <script setup lang="ts" generic="T">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from 'vue'
-import { useVScroll, type ItemSize } from './useVScroll'
+import { useVScroll, type Align, type ItemSize } from './useVScroll'
 import { clearMeasurements, type Measurements } from './core/measure'
 
 const props = withDefaults(
@@ -156,7 +156,7 @@ function commitMeasurements() {
   measurements.value = next
 }
 
-const { view, getOffsetForIndex } = useVScroll({
+const { view, beginJump, cancelJump } = useVScroll({
   count: computed(() => props.items.length),
   itemSize: props.itemSize,
   estimatedItemSize: props.estimatedItemSize,
@@ -170,7 +170,12 @@ const sentinelEl = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
 function onScroll(event: Event) {
-  scrollTop.value = (event.target as HTMLElement).scrollTop
+  const el = event.target as HTMLElement
+  // 两阶段跳转等待修正期间用户手动滚离目标：放弃修正，不再把用户拉回。
+  // 1px 容差吸收浏览器对小数落点的取整与内容收缩时的钳制，避免误判为用户操作
+  // （自身落点/修正设置的位置与 scrollTop.value 一致，不触发取消）。
+  if (Math.abs(el.scrollTop - scrollTop.value) > 1) cancelJump()
+  scrollTop.value = el.scrollTop
 }
 
 /** 修正锚定等逻辑改动的 scrollTop 时，同步回真实滚动容器 */
@@ -197,17 +202,21 @@ const itemStyle = (row: { top: number; size: number }): CSSProperties => ({
   ...(isDynamic.value ? {} : { height: `${row.size}px` }),
 })
 
-/** 跳转到指定索引（start/center/end 对齐） */
-function scrollToIndex(index: number, align: 'start' | 'center' | 'end' = 'start') {
-  const target = getOffsetForIndex(index, align)
-  scrollTop.value = target
-  if (containerEl.value) containerEl.value.scrollTop = target
+/** 统一落点应用：状态与真实容器同步写（修正锚定走 watch(scrollTop) 同步器） */
+function applyScrollTop(value: number) {
+  scrollTop.value = value
+  if (containerEl.value) containerEl.value.scrollTop = value
 }
 
-/** 回到顶部并清空测量（整批换数据后调用，ADR-0003） */
+/** 跳转到指定索引（start/center/end 对齐）；动态模式为两阶段跳转，测量落地后自动修正落点 */
+function scrollToIndex(index: number, align: Align = 'start') {
+  applyScrollTop(beginJump(index, align))
+}
+
+/** 回到顶部并清空测量（整批换数据后调用，ADR-0003），同时放弃未完成的跳转修正 */
 function reset() {
-  scrollTop.value = 0
-  if (containerEl.value) containerEl.value.scrollTop = 0
+  cancelJump()
+  applyScrollTop(0)
   measurements.value = clearMeasurements()
 }
 

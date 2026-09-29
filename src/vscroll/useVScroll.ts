@@ -10,6 +10,9 @@ import { computeWindow, computeWindowFromOffsets, findStartIndex } from './core/
 
 export type ItemSize = number | ((index: number) => number)
 
+/** 跳转/对齐方式：目标行贴视口顶/居中/贴底 */
+export type Align = 'start' | 'center' | 'end'
+
 export interface UseVScrollOptions {
   /** 列表条目总数（响应式） */
   count: Ref<number>
@@ -38,7 +41,7 @@ export interface VScrollRow {
 
 /** VScroll 组件通过 ref 暴露的实例方法（对外类型契约） */
 export interface VScrollExpose {
-  scrollToIndex(index: number, align?: 'start' | 'center' | 'end'): void
+  scrollToIndex(index: number, align?: Align): void
   reset(): void
 }
 
@@ -49,6 +52,9 @@ export interface VScrollView {
 }
 
 const EMPTY_MEASUREMENTS: Measurements = new Map()
+
+/** 两阶段跳转的修正次数上界（CONTEXT.md：有界，不无限循环） */
+const MAX_JUMP_CORRECTIONS = 2
 
 /**
  * 虚拟滚动的核心状态机（不触碰 DOM，便于测试与 v2 复用）：
@@ -98,12 +104,33 @@ export function useVScroll(opts: UseVScrollOptions) {
   })
 
   /**
+   * 两阶段跳转（动态模式）：估算落点已应用，等待测量落地后的有界修正。
+   * 固定/已知变高模式偏移确定，跳转一步到位，不登记。
+   */
+  let pendingJump: {
+    index: number
+    align: Align
+    remaining: number
+  } | null = null
+
+  /**
    * 锚定：offsets 重新计算时（数据增删或测量落地），保持变化前第一个可见项的屏幕位置不变，
    * 用偏移量差修正 scrollTop；列表缩到锚点不存在时钳制到最大滚动位置。
    * 锚点行必须用旧 offsets 定位：新 offsets 下同一 scrollTop 命中的可能已是别的行。
    */
   watch(offsets, (newOffsets, oldOffsets) => {
     if (!oldOffsets || oldOffsets.length === 0) return
+    // 跳转修正优先于锚定：要纹丝不动的是跳转目标行的落点，而非首个可见行。
+    // 预算只被"真正移动落点的修正"消耗：目标行上/下方的无关测量落地不计数，
+    // 否则分批提交的真实浏览器场景下预算会被空跑耗尽。
+    if (pendingJump) {
+      const target = getOffsetForIndex(pendingJump.index, pendingJump.align)
+      if (target !== opts.scrollTop.value) {
+        opts.scrollTop.value = target
+        if (--pendingJump.remaining <= 0) pendingJump = null
+      }
+      return
+    }
     const first = findStartIndex(oldOffsets, opts.scrollTop.value)
     if (first >= newOffsets.length - 1) {
       const maxScroll = Math.max(0, newOffsets[newOffsets.length - 1] - opts.viewportSize.value)
@@ -117,8 +144,24 @@ export function useVScroll(opts: UseVScrollOptions) {
     }
   })
 
+  /**
+   * 两阶段跳转第一阶段：登记跳转意图并返回估算落点（组件直接应用）。
+   * 仅动态模式登记；固定/已知变高偏移确定，等价于 getOffsetForIndex 一步到位。
+   */
+  function beginJump(index: number, align: Align): number {
+    if (opts.itemSize == null) {
+      pendingJump = { index, align, remaining: MAX_JUMP_CORRECTIONS }
+    }
+    return getOffsetForIndex(index, align)
+  }
+
+  /** 放弃等待中的跳转修正（reset，或用户手动滚离目标位置） */
+  function cancelJump() {
+    pendingJump = null
+  }
+
   /** 计算跳转到指定索引所需的滚动偏移（组件负责应用到容器） */
-  function getOffsetForIndex(index: number, align: 'start' | 'center' | 'end' = 'start'): number {
+  function getOffsetForIndex(index: number, align: Align = 'start'): number {
     const n = opts.count.value
     if (n === 0) return 0
     const clamped = Math.min(Math.max(0, index), n - 1)
@@ -131,5 +174,5 @@ export function useVScroll(opts: UseVScrollOptions) {
     return Math.min(Math.max(0, target), max)
   }
 
-  return { view, startIndex, getOffsetForIndex, sizeAt }
+  return { view, startIndex, getOffsetForIndex, sizeAt, beginJump, cancelJump }
 }

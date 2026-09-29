@@ -38,6 +38,71 @@ function mountVScroll(
   })
 }
 
+/** 可控的 ResizeObserver 桩：捕获 callback，记录观察目标，由测试手动触发 */
+class ROStub {
+  static instance: ROStub | null = null
+  callback: ResizeObserverCallback
+  observed: Element[] = []
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+    ROStub.instance = this
+  }
+  observe(el: Element) {
+    this.observed.push(el)
+  }
+  unobserve(el: Element) {
+    this.observed = this.observed.filter((e) => e !== el)
+  }
+  disconnect() {
+    this.observed = []
+  }
+}
+
+const ROStubCtor = ROStub as unknown as typeof ResizeObserver
+
+function rowElFor(index: number): Element {
+  const el = ROStub.instance!.observed.find(
+    (e) => e.querySelector('.row')?.textContent === `item-${index}`,
+  )
+  expect(el, `row ${index} should be observed`).toBeTruthy()
+  return el!
+}
+
+function fireResize(index: number, height: number) {
+  ROStub.instance!.callback(
+    [{ target: rowElFor(index), contentRect: { height } } as unknown as ResizeObserverEntry],
+    ROStub.instance as unknown as ResizeObserver,
+  )
+}
+
+/** 用 rAF 桩替换全局 rAF，测试手动推进帧 */
+function stubRaf() {
+  const callbacks: FrameRequestCallback[] = []
+  const cancelSpy = vi.fn()
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+    callbacks.push(cb)
+    return callbacks.length
+  })
+  vi.stubGlobal('cancelAnimationFrame', cancelSpy)
+  return {
+    flush: () => callbacks.splice(0).forEach((cb) => cb(0)),
+    cancelSpy,
+  }
+}
+
+/** 动态模式标准挂载：估算 40px + RO 桩 */
+function mountDynamicRO() {
+  return mount(VScroll, {
+    props: { items, height: 200, overscan: 2, resizeObserver: ROStubCtor },
+    slots: { item: `<div class="row">{{ item.label }}</div>` },
+  })
+}
+
+const scrollOf = (wrapper: VueWrapper) =>
+  (wrapper.find('.vscroll').element as HTMLElement).scrollTop
+const innerHeight = (wrapper: VueWrapper) =>
+  wrapper.find('.vscroll-inner').attributes('style') ?? ''
+
 describe('VScroll', () => {
   it('renders only the visible window plus overscan rows at the top', () => {
     const wrapper = mountVScroll()
@@ -392,80 +457,21 @@ describe('VScroll · 模式判定与开发告警', () => {
 })
 
 describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
-  /** 可控的 ResizeObserver 桩：捕获 callback，记录观察目标，由测试手动触发 */
-  class ROStub {
-    static instance: ROStub | null = null
-    callback: ResizeObserverCallback
-    observed: Element[] = []
-    constructor(callback: ResizeObserverCallback) {
-      this.callback = callback
-      ROStub.instance = this
-    }
-    observe(el: Element) {
-      this.observed.push(el)
-    }
-    unobserve(el: Element) {
-      this.observed = this.observed.filter((e) => e !== el)
-    }
-    disconnect() {
-      this.observed = []
-    }
-  }
-  const ROStubCtor = ROStub as unknown as typeof ResizeObserver
-
-  let rafCallbacks: FrameRequestCallback[]
-  let cancelSpy: ReturnType<typeof vi.fn>
+  let raf: ReturnType<typeof stubRaf>
 
   beforeEach(() => {
-    rafCallbacks = []
-    cancelSpy = vi.fn()
-    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
-      rafCallbacks.push(cb)
-      return rafCallbacks.length
-    })
-    vi.stubGlobal('cancelAnimationFrame', cancelSpy)
+    raf = stubRaf()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  function flushFrame() {
-    rafCallbacks.splice(0).forEach((cb) => cb(0))
-  }
-
-  function mountDynamicRO() {
-    return mount(VScroll, {
-      props: { items, height: 200, overscan: 2, resizeObserver: ROStubCtor },
-      slots: { item: `<div class="row">{{ item.label }}</div>` },
-    })
-  }
-
-  function rowElFor(index: number): Element {
-    const el = ROStub.instance!.observed.find(
-      (e) => e.querySelector('.row')?.textContent === `item-${index}`,
-    )
-    expect(el, `row ${index} should be observed`).toBeTruthy()
-    return el!
-  }
-
-  function fireResize(index: number, height: number) {
-    ROStub.instance!.callback(
-      [
-        { target: rowElFor(index), contentRect: { height } } as unknown as ResizeObserverEntry,
-      ],
-      ROStub.instance as unknown as ResizeObserver,
-    )
-  }
-
-  const innerHeight = (wrapper: ReturnType<typeof mountDynamicRO>) =>
-    wrapper.find('.vscroll-inner').attributes('style') ?? ''
-
   it('replaces the estimate once a row is measured (layout follows)', async () => {
     const wrapper = mountDynamicRO()
     expect(ROStub.instance!.observed).toHaveLength(7) // 窗口 0..6
     fireResize(0, 100)
-    flushFrame()
+    raf.flush()
     await nextTick()
     expect(innerHeight(wrapper)).toContain('height: 4060px') // 4000 - 40 + 100
     const items = wrapper.findAll('.vscroll-item')
@@ -475,9 +481,9 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
   it('follows when the same row changes again (e.g. content expands)', async () => {
     const wrapper = mountDynamicRO()
     fireResize(0, 100)
-    flushFrame()
+    raf.flush()
     fireResize(0, 60)
-    flushFrame()
+    raf.flush()
     await nextTick()
     expect(innerHeight(wrapper)).toContain('height: 4020px')
     expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 60px')
@@ -489,7 +495,7 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
     fireResize(1, 90)
     fireResize(2, 80)
     expect(innerHeight(wrapper)).toContain('height: 4000px') // 帧提交前不生效
-    flushFrame()
+    raf.flush()
     await nextTick()
     expect(innerHeight(wrapper)).toContain('height: 4150px') // 4000 + 60 + 50 + 40
     expect(wrapper.findAll('.vscroll-item')[3].attributes('style')).toContain('top: 270px')
@@ -503,7 +509,7 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
     expect(wrapper.findAll('.row')[0].text()).toBe('item-8') // 锚点行 10
     fireResize(8, 60)
     fireResize(9, 60)
-    flushFrame()
+    raf.flush()
     await nextTick()
     // 上方两行各 +20：锚点行屏幕位置 0 不变
     expect(container.scrollTop).toBe(440)
@@ -519,7 +525,7 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
     container.scrollTop = 400
     await wrapper.find('.vscroll').trigger('scroll')
     fireResize(10, 80) // 锚点行自身 +40，其上方偏移不变
-    flushFrame()
+    raf.flush()
     await nextTick()
     expect(container.scrollTop).toBe(400)
     const row11 = wrapper
@@ -531,7 +537,7 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
   it('keeps measurements after the row scrolls out of the window', async () => {
     const wrapper = mountDynamicRO()
     fireResize(0, 60)
-    flushFrame()
+    raf.flush()
     await nextTick()
     vmScroll(wrapper).scrollToIndex(50)
     await nextTick()
@@ -545,8 +551,8 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
     const wrapper = mountDynamicRO()
     fireResize(0, 100) // 已调度，未提交
     wrapper.unmount()
-    expect(cancelSpy).toHaveBeenCalled()
-    flushFrame() // 不抛错
+    expect(raf.cancelSpy).toHaveBeenCalled()
+    raf.flush() // 不抛错
   })
 
   it('renders estimates without crashing when no ResizeObserver is available', async () => {
@@ -569,5 +575,165 @@ describe('VScroll · 动态测量（ResizeObserver 落地）', () => {
     )
     expect(observedTexts).toContain('item-48') // 新窗口首行进入观察
     expect(observedTexts).not.toContain('item-0') // 滚出的行停止观察
+  })
+})
+
+describe('VScroll · 两阶段跳转与 reset（动态模式）', () => {
+  let raf: ReturnType<typeof stubRaf>
+
+  beforeEach(() => {
+    raf = stubRaf()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('two-phase jump: rolls to the estimate first, corrects once measured', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50) // 估算偏移：50 * 40 = 2000
+    expect(scrollOf(wrapper)).toBe(2000)
+    await nextTick() // 目标窗口渲染并进入观察
+    fireResize(48, 100) // 目标上方行各 +60/+80：目标新偏移 2140
+    fireResize(49, 120)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2140) // 测量落地后修正，落点准确
+  })
+
+  it('corrects center alignment after the estimate is replaced', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50, 'center') // 2000 - 80 = 1920
+    await nextTick()
+    fireResize(48, 100)
+    fireResize(49, 120)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2060) // 2140 - (200-40)/2
+  })
+
+  it('corrects end alignment after the estimate is replaced', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50, 'end') // 2000 + 40 - 200 = 1840
+    await nextTick()
+    fireResize(48, 100)
+    fireResize(49, 120)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(1980) // 2140 + 40 - 200
+  })
+
+  it('gives up the correction when the user scrolls away from the target', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50) // 2000
+    await nextTick()
+    const container = wrapper.find('.vscroll').element as HTMLElement
+    container.scrollTop = 3000 // 用户手动滚离目标
+    await wrapper.find('.vscroll').trigger('scroll')
+    await nextTick() // 窗口移到 75 行附近
+    fireResize(75, 100) // 锚点行自身变化：锚定本就不修正；跳转已放弃 → 不拉回 2140
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3000)
+  })
+
+  it('retries the correction at most twice', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50, 'center') // 1920
+    await nextTick()
+    fireResize(50, 90) // 目标行自身变高：center 落点变 1945
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(1945) // 修正 1
+    fireResize(50, 130)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(1965) // 修正 2
+    fireResize(50, 170)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(1965) // 上界已到：不再修正
+  })
+
+  it('does not spend retry budget on measurements that leave the landing point unchanged', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50) // 2000
+    await nextTick()
+    fireResize(55, 100) // 目标行下方：落点不变（模拟真实浏览器分批提交）
+    raf.flush()
+    await nextTick()
+    fireResize(54, 120)
+    raf.flush()
+    await nextTick()
+    fireResize(53, 90)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2000) // 三次提交都无需修正，也不计数
+    fireResize(48, 100) // 目标上方：落点真正变化
+    fireResize(49, 120)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2140) // 预算未被空跑耗尽，修正仍生效
+  })
+
+  it('does not schedule corrections in fixed mode (one-shot jump)', async () => {
+    const wrapper = mount(VScroll, {
+      props: { items, itemSize: 50, height: 200, overscan: 2 },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+    vmScroll(wrapper).scrollToIndex(50)
+    expect(scrollOf(wrapper)).toBe(2500)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2500) // 无重试开销
+  })
+
+  it('does not schedule corrections in known-variable mode (one-shot jump)', async () => {
+    const wrapper = mount(VScroll, {
+      props: { items, itemSize: (i: number) => 40 + (i % 3) * 10, height: 200, overscan: 2 },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+    // offset(50)：16 个 [40,50,60] 周期(2400) + 行 48(40) + 行 49(50) = 2490
+    vmScroll(wrapper).scrollToIndex(50)
+    expect(scrollOf(wrapper)).toBe(2490)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2490) // 偏移确定：一步到位
+  })
+
+  it('reset() clears measurements and returns offsets to pure estimates', async () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 100)
+    raf.flush()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4060px')
+    vmScroll(wrapper).reset()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4000px') // 偏移回到纯估算
+    expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 40px')
+  })
+
+  it('reset() cancels a pending jump correction', async () => {
+    const wrapper = mountDynamicRO()
+    vmScroll(wrapper).scrollToIndex(50) // 调度修正
+    await nextTick()
+    fireResize(48, 100)
+    fireResize(49, 120)
+    raf.flush() // 提交后修正已排入 nextTick
+    vmScroll(wrapper).reset()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(0) // 不被拉回第 50 行
+  })
+
+  it('repeated reset() is safe', async () => {
+    const wrapper = mountDynamicRO()
+    fireResize(0, 100)
+    raf.flush()
+    await nextTick()
+    vmScroll(wrapper).reset()
+    vmScroll(wrapper).reset()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(0)
+    expect(innerHeight(wrapper)).toContain('height: 4000px')
   })
 })
