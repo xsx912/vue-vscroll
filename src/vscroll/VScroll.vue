@@ -1,7 +1,12 @@
 <script setup lang="ts" generic="T">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from 'vue'
 import { useVScroll, type Align, type ItemSize } from './useVScroll'
-import { clearMeasurements, type Measurements } from './core/measure'
+import {
+  clearMeasurements,
+  setMeasurements,
+  type MeasureKey,
+  type Measurements,
+} from './core/measure'
 
 const props = withDefaults(
   defineProps<{
@@ -31,6 +36,11 @@ const props = withDefaults(
      */
     resizeObserver?: typeof ResizeObserver
     /**
+     * 身份键（ADR-0005，动态模式）：测量按条目身份归属，整批替换/重排数据时
+     * 测量自动跟随，无需 reset()。键需在当前列表内唯一；不提供则按索引归属
+     */
+    getItemKey?: (item: T, index: number) => string | number
+    /**
      * 钉底（ADR-0004，聊天场景）：已在底部（含底容差）时尾部追加内容仍贴底，
      * 追加行测量落地也继续贴新底；用户上滚离开即退出，滚回恢复。
      * 挂载时列表非空则初始定位到底部
@@ -44,6 +54,11 @@ const props = withDefaults(
 if (import.meta.env.DEV && props.itemSize != null && props.estimatedItemSize != null) {
   console.warn(
     '[vue-vscroll] itemSize 与 estimatedItemSize 同时传入：itemSize 优先，estimatedItemSize 被忽略',
+  )
+}
+if (import.meta.env.DEV && props.itemSize != null && props.getItemKey != null) {
+  console.warn(
+    '[vue-vscroll] itemSize 与 getItemKey 同时传入：行高确定，getItemKey 被忽略',
   )
 }
 
@@ -85,8 +100,9 @@ const rowEls = new Map<number, HTMLElement>()
 /** 每索引一个稳定 ref 回调，避免重渲染时反复 observe/unobserve 抖动 */
 const rowRefFns = new Map<number, (el: unknown) => void>()
 let rowObserver: ResizeObserver | null = null
-/** 本帧内暂存的测量（索引 → 高度），帧末一次性提交 */
-let pendingMeasurements: Map<number, number> | null = null
+/** 每帧内暂存的测量（键 → 高度），帧末一次性提交；键在回调时即刻落定，
+ *  避免 items 在提交前被替换/缩短时错归属或越界 */
+let pendingMeasurements: Map<MeasureKey, number> | null = null
 let commitScheduled = false
 let commitRafId: number | null = null
 /** 组件已卸载：微任务降级路径无法取消，提交时跳过 */
@@ -132,7 +148,8 @@ function onRowsResize(entries: ResizeObserverEntry[]) {
     const index = indexOfRow(entry.target)
     if (index < 0) continue
     const height = Math.round(entry.contentRect.height)
-    ;(pendingMeasurements ??= new Map()).set(index, height)
+    // 键在回调时即刻落定：提交时 items 可能已被替换/缩短
+    ;(pendingMeasurements ??= new Map()).set(keyOf(index), height)
   }
   scheduleCommit()
 }
@@ -148,18 +165,18 @@ function scheduleCommit() {
   }
 }
 
+/** 测量缓存的键：身份键（ADR-0005）缺省回退索引键（ADR-0003） */
+function keyOf(index: number): MeasureKey {
+  return props.getItemKey ? props.getItemKey(props.items[index], index) : index
+}
+
 function commitMeasurements() {
   commitScheduled = false
   commitRafId = null
   const sizes = pendingMeasurements
   pendingMeasurements = null
   if (disposed || !sizes || sizes.size === 0) return
-  // 一帧至多提交一次：offsets 至多重建一次；单次克隆 + 批量写入
-  const next = new Map(measurements.value)
-  for (const [index, size] of sizes) {
-    next.set(index, size)
-  }
-  measurements.value = next
+  measurements.value = setMeasurements(measurements.value, sizes)
 }
 
 const { view, beginJump, cancelJump } = useVScroll({
@@ -167,6 +184,7 @@ const { view, beginJump, cancelJump } = useVScroll({
   itemSize: props.itemSize,
   estimatedItemSize: props.estimatedItemSize,
   measurements,
+  keyAt: keyOf,
   overscan: computed(() => props.overscan),
   scrollTop,
   viewportSize,

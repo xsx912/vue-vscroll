@@ -913,3 +913,131 @@ describe('VScroll · 钉底（动态测量联动）', () => {
     expect(scrollOf(wrapper)).toBe(4200) // 不被残留意图拽回 0
   })
 })
+
+describe('VScroll · 身份键测量（getItemKey）', () => {
+  let raf: ReturnType<typeof stubRaf>
+
+  beforeEach(() => {
+    raf = stubRaf()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** items: { id, label }，身份键 = id（mount 的泛型在 props 对象里坍缩为 unknown，需断言） */
+  const getKey = (item: { id: number }) => item.id
+  const getKeyProp = getKey as unknown as (item: unknown, index: number) => string | number
+
+  function mountKeyed(overrides: Record<string, unknown> = {}) {
+    return mount(VScroll, {
+      props: {
+        items,
+        height: 200,
+        overscan: 2,
+        resizeObserver: ROStubCtor,
+        getItemKey: getKeyProp,
+        ...overrides,
+      },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  /** 整批替换：id 0 与 id 50 互换位置，其余不动 */
+  const swappedItems = () => {
+    const next = [...items]
+    next[0] = items[50]
+    next[50] = items[0]
+    return next
+  }
+
+  it('measurements follow item identity across array replacement', async () => {
+    const wrapper = mountKeyed()
+    fireResize(0, 100) // id 0 → 100px
+    raf.flush()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4060px')
+    await wrapper.setProps({ items: swappedItems() })
+    await nextTick()
+    // 身份键：索引 0（现在是 id 50，未测）回到估算 → 行 1 top 40px
+    expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 40px')
+    // id 0 的测量跟到索引 50：top = 40(id50 估算) + 49×40 = 2000px（索引键则为 2060）
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    const rowOfId0 = wrapper.findAll('.vscroll-item').find((el) => el.text() === 'item-0')!
+    expect(rowOfId0.attributes('style')).toContain('top: 2000px')
+  })
+
+  it('keeps index-keyed measurements by default (control)', async () => {
+    const wrapper = mountKeyed({ getItemKey: undefined })
+    fireResize(0, 100)
+    raf.flush()
+    await nextTick()
+    await wrapper.setProps({ items: swappedItems() })
+    await nextTick()
+    // 索引键：测量留在索引 0（无论谁占据）→ 行 1 top 100px
+    expect(wrapper.findAll('.vscroll-item')[1].attributes('style')).toContain('top: 100px')
+  })
+
+  it('reset() clears identity-keyed measurements', async () => {
+    const wrapper = mountKeyed()
+    fireResize(0, 100)
+    raf.flush()
+    await nextTick()
+    vmScroll(wrapper).reset()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 4000px')
+  })
+
+  it('two-phase jump corrects correctly with identity keys', async () => {
+    const wrapper = mountKeyed()
+    vmScroll(wrapper).scrollToIndex(50)
+    expect(scrollOf(wrapper)).toBe(2000)
+    await nextTick()
+    fireResize(48, 100)
+    fireResize(49, 120)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2140)
+  })
+
+  it('stickToBottom keeps working with identity keys', async () => {
+    const wrapper = mountKeyed({ stickToBottom: true })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3800)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4200)
+  })
+
+  it('does not crash when items shrink between measurement and frame commit', async () => {
+    const wrapper = mountKeyed()
+    vmScroll(wrapper).scrollToIndex(90)
+    await nextTick()
+    fireResize(90, 100) // 回调时键已落定（id 90）
+    await wrapper.setProps({ items: items.slice(0, 50) }) // rAF 提交前数据缩短
+    expect(() => raf.flush()).not.toThrow()
+    await nextTick()
+    expect(innerHeight(wrapper)).toContain('height: 2000px') // 缩短后偏移正常
+  })
+
+  it('warns in dev when getItemKey is combined with itemSize (ignored)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      mount(VScroll, {
+        props: {
+          items,
+          itemSize: 50,
+          height: 200,
+          overscan: 2,
+          getItemKey: getKeyProp,
+        },
+        slots: { item: `<div class="row">{{ item.label }}</div>` },
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0][0])).toContain('getItemKey')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

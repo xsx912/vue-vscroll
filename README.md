@@ -4,6 +4,7 @@
 
 - **零运行时依赖**：核心算法与组件只依赖 Vue 本身
 - **三种行高模式**：`itemSize` 传数字 = 固定行高，传函数 = 已知变高，缺省 = 动态高度（ResizeObserver 实测 + 估算渲染 + 测量缓存）
+- **身份键测量**：`getItemKey` 提供时整批替换/重排数据测量自动跟随，无需 `reset()`
 - **完整插槽集**：`item` / `header` / `footer` / `empty` / `loading`
 - **触底加载**：IntersectionObserver 哨兵，滚动到底自动 `loadMore`
 - **程序化定位**：`scrollToIndex`（start/center/end 对齐）；动态模式下为两阶段跳转——先落估算位置，测量落地后自动修正
@@ -50,6 +51,7 @@ function loadMore() {
 | `loading` | `boolean` | `false` | 为 true 时渲染底部 `loading` 插槽 |
 | `intersectionObserver` | `typeof IntersectionObserver` | 全局 | 注入 IntersectionObserver（测试/降级用） |
 | `resizeObserver` | `typeof ResizeObserver` | 全局 | 注入 ResizeObserver（动态模式行测量/测试用）；环境缺失时按估算渲染 |
+| `getItemKey` | `(item: T, index: number) => string \| number` | — | 身份键：动态模式测量按条目归属，替换/重排数据自动跟随；键需唯一 |
 | `stickToBottom` | `boolean` | `false` | 钉底（聊天场景）：已在底部（含底容差）时尾部追加仍贴底，测量落地继续贴新底；上滚退出、滚回恢复；挂载时非空则初始贴底 |
 
 ### Slots
@@ -110,8 +112,7 @@ npm run build:lib  # 库构建（ESM/CJS + d.ts）
 
 ## 路线图
 
-- [ ] **身份键测量**（`getItemKey`）：测量按条目身份而非索引归属，替换数据时高度自动跟随
-- [ ] 头部插入锚定（向上加载历史消息）
+- [ ] 头部插入锚定（向上加载历史消息；身份键地基已就位）
 - [ ] 横向滚动 / 网格多列
 - [ ] SSR 安全（当前仅保证不崩，完整支持待做）
 - [ ] 无障碍语义（role/aria 治理）

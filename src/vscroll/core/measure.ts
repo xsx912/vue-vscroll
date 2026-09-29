@@ -1,22 +1,37 @@
 /**
  * 测量核心：动态高度模式的纯函数层（不触 DOM，spec 决策 4 的唯一新 seam）。
- * 术语见 CONTEXT.md：测量（索引键归属）、估算高度、偏移、总高。
+ * 术语见 CONTEXT.md：测量（索引键/身份键归属）、估算高度、偏移、总高。
  */
 
 /** 动态模式未测行的估算高度缺省值（px） */
 export const DEFAULT_ESTIMATED_ITEM_SIZE = 40
 
-/** 测量缓存：索引键 → 已测行高。跨 items 变更保留（ADR-0003），清空 = 替换为新缓存 */
-export type Measurements = ReadonlyMap<number, number>
+/** 测量缓存的键：索引键（默认，ADR-0003）或身份键（getItemKey，ADR-0005） */
+export type MeasureKey = number | string
+
+/** 测量缓存：键 → 已测行高。跨 items 变更保留（ADR-0003），清空 = 替换为新缓存 */
+export type Measurements = ReadonlyMap<MeasureKey, number>
 
 /** 写入一条测量：返回新缓存（原缓存不变，便于按帧合并后一次性提交） */
 export function setMeasurement(
   measurements: Measurements,
-  index: number,
+  key: MeasureKey,
   size: number,
 ): Measurements {
   const next = new Map(measurements)
-  next.set(index, size)
+  next.set(key, size)
+  return next
+}
+
+/** 批量写入测量（一帧合并后一次提交）：返回新缓存，offsets 至多重建一次 */
+export function setMeasurements(
+  measurements: Measurements,
+  entries: Iterable<[MeasureKey, number]>,
+): Measurements {
+  const next = new Map(measurements)
+  for (const [key, size] of entries) {
+    next.set(key, size)
+  }
   return next
 }
 
@@ -31,9 +46,9 @@ export function clearMeasurements(): Measurements {
 export function measuredSizeAt(
   measurements: Measurements,
   estimatedItemSize: number,
-  index: number,
+  key: MeasureKey,
 ): number {
-  return measurements.get(index) ?? estimatedItemSize
+  return measurements.get(key) ?? estimatedItemSize
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   DEFAULT_ESTIMATED_ITEM_SIZE,
   measuredSizeAt,
   totalSize,
+  type MeasureKey,
   type Measurements,
 } from './core/measure'
 import { computeWindow, computeWindowFromOffsets, findStartIndex } from './core/window'
@@ -23,8 +24,10 @@ export interface UseVScrollOptions {
   itemSize?: ItemSize
   /** 动态模式下未测行的估算高度（px，默认 40） */
   estimatedItemSize?: number
-  /** 动态模式的测量缓存（索引键 → 真实行高）；由组件持有，reset() 清空 */
+  /** 动态模式的测量缓存（索引键/身份键 → 真实行高）；由组件持有，reset() 清空 */
   measurements?: Ref<Measurements>
+  /** 身份键（ADR-0005）：索引 → 测量缓存键；缺省为索引本身（ADR-0003 索引键） */
+  keyAt?: (index: number) => MeasureKey
   /** 钉底（ADR-0004 opt-in）：变化前已在底部（含底容差）则贴新底 */
   stickToBottom?: Ref<boolean>
   /** 视口外缓冲行数 */
@@ -84,11 +87,11 @@ export function useVScroll(opts: UseVScrollOptions) {
     const size = opts.itemSize
     if (typeof size === 'number') return size
     if (typeof size === 'function') return size(index)
-    // 动态高度：已测值取代估算值
+    // 动态高度：已测值取代估算值（键 = 身份键 ?: 索引键）
     return measuredSizeAt(
       opts.measurements?.value ?? EMPTY_MEASUREMENTS,
       opts.estimatedItemSize ?? DEFAULT_ESTIMATED_ITEM_SIZE,
-      index,
+      opts.keyAt?.(index) ?? index,
     )
   }
 
