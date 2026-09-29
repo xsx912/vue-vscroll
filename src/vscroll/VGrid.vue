@@ -133,8 +133,16 @@ defineExpose({ scrollToRow, reset })
 </script>
 
 <template>
-  <div ref="containerEl" class="vgrid" :style="containerStyle" @scroll.passive="onScroll">
-    <div class="vgrid-header">
+  <div
+    ref="containerEl"
+    class="vgrid"
+    :style="containerStyle"
+    tabindex="0"
+    role="grid"
+    :aria-rowcount="rows.length + 1"
+    @scroll.passive="onScroll"
+  >
+    <div class="vgrid-header" role="row">
       <slot name="header" :columns="columns" />
     </div>
     <div class="vgrid-inner" :style="innerStyle">
@@ -143,12 +151,15 @@ defineExpose({ scrollToRow, reset })
           v-for="row in view.rows"
           :key="row.index"
           class="vgrid-row"
+          role="row"
+          :aria-rowindex="row.index + 2"
           :style="{ top: `${row.top}px`, height: `${rowSize}px` }"
         >
           <div
             v-for="(col, column) in columns"
             :key="column"
             class="vgrid-cell"
+            role="gridcell"
             :style="{ width: `${col}px` }"
           >
             <slot name="cell" :item="rows[row.index]" :row="row.index" :column="column" />

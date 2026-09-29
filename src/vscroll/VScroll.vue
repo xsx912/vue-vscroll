@@ -320,7 +320,13 @@ defineExpose({ scrollToIndex, reset })
 </script>
 
 <template>
-  <div ref="containerEl" class="vscroll" :style="containerStyle" @scroll.passive="onScroll">
+  <div
+    ref="containerEl"
+    class="vscroll"
+    :style="containerStyle"
+    tabindex="0"
+    @scroll.passive="onScroll"
+  >
     <slot name="header" />
     <div class="vscroll-inner" :style="innerStyle">
       <template v-if="items.length > 0">

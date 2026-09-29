@@ -19,6 +19,7 @@ export default defineConfig({
           { text: '快速上手', link: '/guide/usage' },
           { text: '行高模式', link: '/guide/dynamic-heights' },
           { text: '虚拟表格', link: '/guide/grid' },
+          { text: 'SSR 与无障碍', link: '/guide/ssr-a11y' },
           { text: 'API 参考', link: '/guide/api' },
           { text: '性能基准', link: '/guide/benchmark' },
         ],
