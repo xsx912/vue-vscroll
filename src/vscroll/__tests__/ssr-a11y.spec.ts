@@ -23,6 +23,23 @@ describe('SSR 与无障碍', () => {
     expect(html).toContain('row-0') // 首窗口在服务端渲染
   })
 
+  it('VGrid SSR renders header + first rows + table semantics', async () => {
+    const html = await renderToString(
+      createSSRApp({
+        render: () =>
+          h(VGrid as never, { rows, columns: [100, 80], rowSize: 40, height: 200, overscan: 1 }, {
+            cell: ({ item }: { item: { name: string } }) => h('span', item.name),
+            header: () => h('div', { role: 'columnheader' }, '标题'),
+          } as never),
+      }),
+    )
+    expect(html).toContain('role="grid"')
+    expect(html).toContain('aria-rowcount="101"')
+    expect(html).toContain('columnheader')
+    expect(html).toContain('height:4000px') // 占位总高
+    expect(html).toContain('名称 0') // 首行在服务端渲染
+  })
+
   it('hydrates over SSR markup without mismatch warnings', async () => {
     const html = await renderToString(
       createSSRApp({
