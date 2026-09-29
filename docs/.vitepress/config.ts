@@ -17,6 +17,7 @@ export default defineConfig({
         items: [
           { text: '安装', link: '/guide/installation' },
           { text: '快速上手', link: '/guide/usage' },
+          { text: '行高模式', link: '/guide/dynamic-heights' },
           { text: 'API 参考', link: '/guide/api' },
           { text: '性能基准', link: '/guide/benchmark' },
         ],
@@ -26,6 +27,8 @@ export default defineConfig({
         items: [
           { text: '基础用法', link: '/examples/basic' },
           { text: '触底加载', link: '/examples/infinite' },
+          { text: '已知变高', link: '/examples/variable-heights' },
+          { text: '动态高度（测量）', link: '/examples/dynamic-measure' },
         ],
       },
     ],

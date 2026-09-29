@@ -1,13 +1,13 @@
 # vue-vscroll
 
-高性能虚拟滚动列表组件（Vue 3 + TypeScript）。在只渲染可视区 + 缓冲行的前提下，用 padding 占位撑起滚动条假高度，10 万条数据也能保持 DOM 节点数恒定、60fps 滚动。
+高性能虚拟滚动列表组件（Vue 3 + TypeScript）。在只渲染可视区 + 缓冲行的前提下，用占位撑起滚动条真实总高，10 万条数据保持 DOM 节点数有界、60fps 滚动。
 
 - **零运行时依赖**：核心算法与组件只依赖 Vue 本身
-- **定高起步，动态高度预留**：`itemSize` 支持 `number | (index) => number`
+- **三种行高模式**：`itemSize` 传数字 = 固定行高，传函数 = 已知变高，缺省 = 动态高度（ResizeObserver 实测 + 估算渲染 + 测量缓存）
 - **完整插槽集**：`item` / `header` / `footer` / `empty` / `loading`
 - **触底加载**：IntersectionObserver 哨兵，滚动到底自动 `loadMore`
-- **程序化定位**：`scrollToIndex`（start/center/end 对齐）、`reset()`
-- **数据变更锚定**：列表增删时保持可视位置不跳动
+- **程序化定位**：`scrollToIndex`（start/center/end 对齐）；动态模式下为两阶段跳转——先落估算位置，测量落地后自动修正
+- **数据变更锚定**：列表增删或测量落地时保持可视位置不跳动
 
 ## 快速开始
 
@@ -42,11 +42,13 @@ function loadMore() {
 | Prop | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `items` | `T[]` | — | 列表数据（组件为泛型，插槽自动推导类型） |
-| `itemSize` | `number \| (index: number) => number` | — | 滚动方向上的单行尺寸（px）；函数形式为 v2 动态高度预留 |
+| `itemSize` | `number \| (index: number) => number` | — | 行高来源，决定模式：数字 = 固定行高，函数 = 已知变高，缺省 = 动态高度（详见[文档·行高模式](https://xsx912.github.io/vue-vscroll/guide/dynamic-heights)） |
+| `estimatedItemSize` | `number` | `40` | 动态模式下未测行的估算高度（px）；`itemSize` 存在时被忽略 |
 | `height` | `number \| string` | — | 容器固定高度；不传则撑满父容器 |
 | `overscan` | `number` | `5` | 视口外上下各预渲染的行数 |
 | `loading` | `boolean` | `false` | 为 true 时渲染底部 `loading` 插槽 |
 | `intersectionObserver` | `typeof IntersectionObserver` | 全局 | 注入 IntersectionObserver（测试/降级用） |
+| `resizeObserver` | `typeof ResizeObserver` | 全局 | 注入 ResizeObserver（动态模式行测量/测试用）；环境缺失时按估算渲染 |
 
 ### Slots
 
@@ -67,42 +69,47 @@ function loadMore() {
 
 | 方法 | 说明 |
 | --- | --- |
-| `scrollToIndex(index, align?)` | 跳转到指定索引，`align`：`'start' \| 'center' \| 'end'` |
-| `reset()` | 回到顶部 |
+| `scrollToIndex(index, align?)` | 跳转到指定索引，`align`：`'start' \| 'center' \| 'end'`；动态模式下两阶段跳转（估算落点 → 测量修正，用户滚离则放弃） |
+| `reset()` | 回到顶部并清空全部测量（整批替换数据后调用） |
 
 ## 性能基准
 
-实测环境：Chromium，10 万条定高（50px）数据，视口 600px。
+实测环境：Chromium，10 万条数据，视口 600px。
 
-| 指标 | 验收线 | 实测 |
+| 指标 | 固定行高（50px） | 动态高度（36–108px，测量） |
 | --- | --- | --- |
-| 渲染 DOM 节点数 | 恒定（可视 + overscan） | ✅ 顶部 17、滚动中 22 |
-| 滚动帧率 | 60fps | ✅ 60–61fps |
-| 首屏渲染 | < 100ms | ✅ 1–7ms |
-| 主线程长任务 | < 16ms | ✅ 0 次 |
+| 渲染 DOM 节点数 | ✅ 17–22，恒定 | ✅ 13–18，有界（上界 = 视口/最矮行 + 2×缓冲） |
+| 滚动帧率 | ✅ 60–61fps | ✅ 60fps |
+| 首屏渲染 | ✅ 1–7ms | ✅ 13ms |
+| 主线程长任务 | ✅ 0 次 | ✅ 0 次 |
 
-运行 `npm run dev` 后访问 [#bench](http://localhost:5173/#bench) 可在线复测。
+动态模式由 `scripts/bench-acceptance.mjs`（puppeteer-core 驱动本机 Chrome，生产构建）自动验收：滚轮连续滚动、两阶段跳转、DOM 采样，任一门楣不过则非零退出。
+
+运行 `npm run dev` 后访问 [#bench](http://localhost:5173/#bench) 可在线复测（固定/动态模式并列）。
 
 ## 开发
 
 ```bash
 npm install
-npm run dev        # 示例页（demo）+ 基准页（#bench）
-npm test           # Vitest：核心算法 + 组件行为（31 个用例）
+npm run dev        # 示例页（demo）+ 基准页（#bench，固定/动态并列）
+npm test           # Vitest：核心算法 + 组件行为（84 个用例）
 npm run typecheck  # vue-tsc 全项目类型检查
 npm run build      # 生产构建（vue-tsc + Vite）
+npm run build:lib  # 库构建（ESM/CJS + d.ts）
 ```
 
 ## 设计说明
 
 - **窗口计算**（`src/vscroll/core/window.ts`）：`findStartIndex` 二分查找 + `computeWindow` 计算渲染窗口与上下占位，纯函数、零依赖、单测覆盖
-- **状态机**（`src/vscroll/useVScroll.ts`）：不触碰 DOM，由 `scrollTop → 窗口` 单向推导；数据变化时以第一个可见项为锚修正滚动偏移
+- **测量核心**（`src/vscroll/core/measure.ts`）：索引键测量缓存 + 偏移重建 + 总高，纯函数层
+- **状态机**（`src/vscroll/useVScroll.ts`）：不触碰 DOM，由 `scrollTop → 窗口` 单向推导；数据变化/测量落地时锚定修正滚动偏移；两阶段跳转（估算落点 + 有界修正）
 - **触底哨兵**：过滤 IntersectionObserver 首次非相交回调（避免挂载即触发 `loadMore`）
-- 组件目录已按「可拆包」标准组织，将来可直接迁移为独立 npm 包
+- **行测量**：ResizeObserver 持续观察已渲染行，按帧合并提交；无 RO 环境优雅降级
 
-## 路线图（v2）
+## 路线图
 
-- [ ] 动态高度（ResizeObserver 实测 + 测量缓存；`itemSize` 函数接口已就位）
+- [ ] **钉底**（end-anchoring）：视图已在底部时新内容追加后仍钉在底部——聊天场景语义
+- [ ] **身份键测量**（`getItemKey`）：测量按条目身份而非索引归属，替换数据时高度自动跟随
 - [ ] 横向滚动 / 网格多列
-- [ ] SSR 安全（当前不做特殊处理）
+- [ ] SSR 安全（当前仅保证不崩，完整支持待做）
 - [ ] 无障碍语义（role/aria 治理）

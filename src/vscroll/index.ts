@@ -5,6 +5,7 @@
 export { default as VScroll } from './VScroll.vue'
 export { useVScroll } from './useVScroll'
 export type {
+  Align,
   ItemSize,
   UseVScrollOptions,
   VScrollExpose,
