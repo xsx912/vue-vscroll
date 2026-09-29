@@ -914,6 +914,10 @@ describe('VScroll · 钉底（动态测量联动）', () => {
   })
 })
 
+/** 身份键 = item.id（mount 的泛型在 props 对象里坍缩为 unknown，需断言） */
+const getKey = (item: { id: number }) => item.id
+const getKeyProp = getKey as unknown as (item: unknown, index: number) => string | number
+
 describe('VScroll · 身份键测量（getItemKey）', () => {
   let raf: ReturnType<typeof stubRaf>
 
@@ -924,10 +928,6 @@ describe('VScroll · 身份键测量（getItemKey）', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
-
-  /** items: { id, label }，身份键 = id（mount 的泛型在 props 对象里坍缩为 unknown，需断言） */
-  const getKey = (item: { id: number }) => item.id
-  const getKeyProp = getKey as unknown as (item: unknown, index: number) => string | number
 
   function mountKeyed(overrides: Record<string, unknown> = {}) {
     return mount(VScroll, {
@@ -1039,5 +1039,130 @@ describe('VScroll · 身份键测量（getItemKey）', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe('VScroll · 头部插入锚定（向上加载历史）', () => {
+  let raf: ReturnType<typeof stubRaf>
+
+  beforeEach(() => {
+    raf = stubRaf()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** 身份键动态列表：items 100 条，est 40 */
+  function mountPrependable(overrides: Record<string, unknown> = {}) {
+    return mount(VScroll, {
+      props: {
+        items,
+        height: 200,
+        overscan: 2,
+        resizeObserver: ROStubCtor,
+        getItemKey: getKeyProp,
+        ...overrides,
+      },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  it('holds the first visible row in place when history is prepended (identity keys)', async () => {
+    const wrapper = mountPrependable()
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    const firstVisibleBefore = wrapper.findAll('.row')[0].text()
+    expect(scrollOf(wrapper)).toBe(2000)
+    await wrapper.setProps({ items: [...moreItems(100, 10), ...items] }) // 纯头部插入 10 条
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2400) // + 插入块 10×40
+    expect(wrapper.findAll('.row')[0].text()).toBe(firstVisibleBefore) // 同一行仍在视口顶
+  })
+
+  it('corrects again when the prepended block measures taller than estimated', async () => {
+    const wrapper = mountPrependable()
+    fireResize(0, 100) // id 0 → 100px（此时在顶部）
+    raf.flush()
+    await nextTick()
+    await wrapper.setProps({ items: [...moreItems(100, 10), ...items] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(400) // 估算块 10×40
+    expect(wrapper.findAll('.row')[0].text()).toBe('item-108') // 视口顶是 id0，窗口含 2 行缓冲
+    fireResize(108, 60) // 窗口内仍可见的前插行测出 60px（估算 40）
+    fireResize(109, 60)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(440) // id0 顶部不动：400 + 2×(60-40)
+  })
+
+  it('anchors prepend by reference in fixed mode (no keys needed)', async () => {
+    const wrapper = mount(VScroll, {
+      props: { items, itemSize: 50, height: 200, overscan: 2 },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    const firstVisibleBefore = wrapper.findAll('.row')[0].text()
+    expect(firstVisibleBefore).toBe('item-48')
+    await wrapper.setProps({ items: [...moreItems(100, 10), ...items] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3000) // + 10×50
+    expect(wrapper.findAll('.row')[0].text()).toBe(firstVisibleBefore)
+  })
+
+  it('leaves dynamic index-keyed mode uncorrected (unsupported, no crash)', async () => {
+    const wrapper = mountPrependable({ getItemKey: undefined })
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2000)
+    await wrapper.setProps({ items: [...moreItems(100, 10), ...items] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2000) // 不识别前插：位置不动（文档契约）
+  })
+
+  it('prepend invalidates a pending jump intent (index semantics shifted)', async () => {
+    const wrapper = mountPrependable()
+    vmScroll(wrapper).scrollToIndex(50, 'center') // 登记 {50, center}，1920
+    await nextTick()
+    await wrapper.setProps({ items: [...moreItems(100, 10), ...items] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2320) // 前插修正 1920+400，而非跳转修正
+    fireResize(46, 100) // 锚点行（新索引 58 = item-48）上方两行测高
+    fireResize(47, 120)
+    raf.flush()
+    await nextTick()
+    // 跳转意图已被前插作废 → 走锚定：锚点上方 +140
+    expect(scrollOf(wrapper)).toBe(2460) // 2320 + (100-40) + (120-40)
+  })
+
+  it('falls back to the legacy anchor for mixed changes (probe fails)', async () => {
+    const wrapper = mountPrependable()
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2000)
+    // 头尾同时追加：探测失败（原首条不在 next[n]）→ 不识别为纯前插
+    await wrapper.setProps({
+      items: [...moreItems(100, 5), ...items, ...moreItems(200, 5)],
+    })
+    await nextTick()
+    // 跳转仍登记（未消费前插）：目标 = 新索引 50 的偏移 2000，与当前一致 → 不动
+    expect(scrollOf(wrapper)).toBe(2000)
+  })
+
+  it('skips reference probing for primitive arrays without getItemKey', async () => {
+    const strings = Array.from({ length: 100 }, (_, i) => `s-${i}`)
+    const wrapper = mount(VScroll, {
+      props: { items: strings, itemSize: 50, height: 200, overscan: 2 },
+      slots: { item: `<div class="row">{{ item }}</div>` },
+    })
+    vmScroll(wrapper).scrollToIndex(50)
+    await nextTick()
+    const before = scrollOf(wrapper)
+    await wrapper.setProps({
+      items: [...Array.from({ length: 10 }, (_, i) => `new-${i}`), ...strings],
+    })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(before) // 不可靠探测：不修正（契约：需 getItemKey）
   })
 })

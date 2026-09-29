@@ -30,6 +30,8 @@ export interface UseVScrollOptions {
   keyAt?: (index: number) => MeasureKey
   /** 钉底（ADR-0004 opt-in）：变化前已在底部（含底容差）则贴新底 */
   stickToBottom?: Ref<boolean>
+  /** 头部插入修正量取用（consume-once，ADR-0006）：组件检测到纯头部插入时提供 */
+  prependShift?: () => number | null
   /** 视口外缓冲行数 */
   overscan: Ref<number>
   /** 滚动偏移（px），由滚动容器喂入 */
@@ -142,6 +144,19 @@ export function useVScroll(opts: UseVScrollOptions) {
    */
   watch(offsets, (newOffsets, oldOffsets) => {
     if (!oldOffsets || oldOffsets.length === 0) return
+    // 头部插入（ADR-0006）优先：老首条原位后移 → 按插入块总高修正，保持其屏幕
+    // 位置；前插使索引语义失效，跳转意图作废（在底部时本修正与贴底数学等价）
+    const shift = opts.prependShift?.() ?? null
+    if (shift != null) {
+      pendingJump = null
+      if (shift > 0) {
+        opts.scrollTop.value = Math.min(
+          opts.scrollTop.value + shift,
+          maxScrollOf(newOffsets, opts.viewportSize.value),
+        )
+      }
+      return
+    }
     // 跳转修正优先于锚定：要纹丝不动的是跳转目标行的落点，而非首个可见行。
     // 预算只被"真正移动落点的修正"消耗：目标行上/下方的无关测量落地不计数，
     // 否则分批提交的真实浏览器场景下预算会被空跑耗尽。

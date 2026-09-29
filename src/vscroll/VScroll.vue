@@ -179,17 +179,57 @@ function commitMeasurements() {
   measurements.value = setMeasurements(measurements.value, sizes)
 }
 
-const { view, beginJump, cancelJump } = useVScroll({
+/** 待消费的头部插入修正量（px）：offsets watcher 在下次重算时取走 */
+let pendingPrependShift: number | null = null
+/** useVScroll 的 sizeAt（setup 完成后晚绑定，供前插块高计算复用行高解析） */
+let sizeAtFn: ((index: number) => number) | null = null
+
+/**
+ * 头部插入检测（ADR-0006，向上加载历史）：纯头部插入 = 原首条原位后移，
+ * O(1) 探测——身份键比对（动态模式必备，索引平移否则测量错位）或对象
+ * 引用比对（定高/已知变高免键；原始值数组退化为值相等，需 getItemKey）。
+ * 修正量 = 插入块总高。须在 useVScroll 之前注册：其内部 offsets watcher
+ * 先创建先执行。
+ */
+watch(
+  () => props.items,
+  (next, prev) => {
+    pendingPrependShift = null
+    if (!Array.isArray(next) || !Array.isArray(prev) || next.length <= prev.length) return
+    const n = next.length - prev.length
+    if (n >= next.length || !sizeAtFn) return
+    const getKey = props.getItemKey
+    if (props.itemSize == null && !getKey) return // 动态 + 索引键：不支持（ADR-0005）
+    if (getKey) {
+      if (getKey(prev[0], 0) !== getKey(next[n], n)) return
+    } else if (prev[0] != null && typeof prev[0] === 'object') {
+      if (prev[0] !== next[n]) return
+    } else {
+      return // 原始值数组无 getItemKey：不可靠探测，跳过
+    }
+    let block = 0
+    for (let i = 0; i < n; i++) block += sizeAtFn(i)
+    pendingPrependShift = block
+  },
+)
+
+const { view, beginJump, cancelJump, sizeAt } = useVScroll({
   count: computed(() => props.items.length),
   itemSize: props.itemSize,
   estimatedItemSize: props.estimatedItemSize,
   measurements,
   keyAt: keyOf,
+  prependShift: () => {
+    const shift = pendingPrependShift
+    pendingPrependShift = null
+    return shift
+  },
   overscan: computed(() => props.overscan),
   scrollTop,
   viewportSize,
   stickToBottom: computed(() => props.stickToBottom),
 })
+sizeAtFn = sizeAt
 
 const sentinelEl = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
@@ -332,6 +372,8 @@ defineExpose({ scrollToIndex, reset })
   overflow: auto;
   position: relative;
   -webkit-overflow-scrolling: touch;
+  /* 关闭浏览器原生滚动锚定：虚拟列表自行修正，原生锚定会双重补偿（尤其头部插入） */
+  overflow-anchor: none;
 }
 .vscroll-inner {
   width: 100%;

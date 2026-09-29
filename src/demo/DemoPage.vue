@@ -27,8 +27,16 @@ const varEl = ref<VScrollExpose | null>(null)
 const sizeAt = (index: number) => 40 + ((index * 53) % 101)
 const heightClass = (index: number) => (sizeAt(index) > 90 ? 'card-tall' : 'card-short')
 
+interface ChatMsg {
+  id: number
+  self: boolean
+  lines: number
+  text: string
+}
+const chatKey = (m: ChatMsg) => m.id
+
 // 钉底：动态高度聊天——追加消息贴底，测量落地继续贴新底；上滚读历史不打扰
-const chatItems = ref(
+const chatItems = ref<ChatMsg[]>(
   Array.from({ length: 60 }, (_, i) => ({
     id: i,
     self: i % 3 === 0,
@@ -41,6 +49,15 @@ let chatTail = 60
 function receiveMessage() {
   const n = chatTail++
   chatItems.value.push({ id: n, self: n % 3 === 0, lines: 1 + ((n * 7) % 3), text: `消息 ${n}` })
+}
+let chatHead = -1
+/** 向上加载历史：纯头部插入，视图锚定不动（ADR-0006） */
+function loadEarlier() {
+  const earlier = Array.from({ length: 10 }, () => {
+    const id = chatHead--
+    return { id, self: id % 3 === 0, lines: 1 + ((Math.abs(id) * 7) % 3), text: `更早的消息 ${id}` }
+  })
+  chatItems.value = [...earlier, ...chatItems.value]
 }
 </script>
 
@@ -110,9 +127,10 @@ function receiveMessage() {
     </VScroll>
 
     <h2>钉底示例（stickToBottom · 聊天场景）</h2>
-    <p class="tip">动态测量 + 钉底联动：贴底时点「收到新消息」仍贴底（行高测出后继续贴新底）；上滚读历史则不打扰，滚回底部恢复</p>
+    <p class="tip">动态测量 + 钉底 + 头部插入三联动：贴底时点「收到新消息」仍贴底；滚到顶部附近点「加载更早」，视图锚定不动；身份键让测量跟随条目</p>
     <div class="actions">
       <button @click="receiveMessage">收到新消息</button>
+      <button @click="loadEarlier">加载更早 10 条</button>
       <button @click="chatEl?.scrollToIndex(0)">回顶部读历史</button>
     </div>
     <VScroll
@@ -122,6 +140,7 @@ function receiveMessage() {
       :estimated-item-size="48"
       :height="360"
       :overscan="4"
+      :get-item-key="chatKey"
       stick-to-bottom
     >
       <template #item="{ item }">
