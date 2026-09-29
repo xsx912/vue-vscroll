@@ -7,6 +7,7 @@
 - **完整插槽集**：`item` / `header` / `footer` / `empty` / `loading`
 - **触底加载**：IntersectionObserver 哨兵，滚动到底自动 `loadMore`
 - **程序化定位**：`scrollToIndex`（start/center/end 对齐）；动态模式下为两阶段跳转——先落估算位置，测量落地后自动修正
+- **钉底**：`stickToBottom`（聊天场景）——贴底时尾部追加仍贴底，测量落地继续贴新底；上滚即退出，滚回恢复
 - **数据变更锚定**：列表增删或测量落地时保持可视位置不跳动
 
 ## 快速开始
@@ -49,6 +50,7 @@ function loadMore() {
 | `loading` | `boolean` | `false` | 为 true 时渲染底部 `loading` 插槽 |
 | `intersectionObserver` | `typeof IntersectionObserver` | 全局 | 注入 IntersectionObserver（测试/降级用） |
 | `resizeObserver` | `typeof ResizeObserver` | 全局 | 注入 ResizeObserver（动态模式行测量/测试用）；环境缺失时按估算渲染 |
+| `stickToBottom` | `boolean` | `false` | 钉底（聊天场景）：已在底部（含底容差）时尾部追加仍贴底，测量落地继续贴新底；上滚退出、滚回恢复；挂载时非空则初始贴底 |
 
 ### Slots
 
@@ -108,8 +110,8 @@ npm run build:lib  # 库构建（ESM/CJS + d.ts）
 
 ## 路线图
 
-- [ ] **钉底**（end-anchoring）：视图已在底部时新内容追加后仍钉在底部——聊天场景语义
 - [ ] **身份键测量**（`getItemKey`）：测量按条目身份而非索引归属，替换数据时高度自动跟随
+- [ ] 头部插入锚定（向上加载历史消息）
 - [ ] 横向滚动 / 网格多列
 - [ ] SSR 安全（当前仅保证不崩，完整支持待做）
 - [ ] 无障碍语义（role/aria 治理）

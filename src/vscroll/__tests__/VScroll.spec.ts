@@ -98,6 +98,17 @@ function mountDynamicRO() {
   })
 }
 
+/** 生成追加数据（标签与 items 同构） */
+const moreItems = (from: number, n: number) =>
+  Array.from({ length: n }, (_, i) => ({ id: from + i, label: `item-${from + i}` }))
+
+/** 程序化滚动到指定位置（模拟用户滚动事件） */
+async function userScrollTo(wrapper: VueWrapper, top: number) {
+  const container = wrapper.find('.vscroll').element as HTMLElement
+  container.scrollTop = top
+  await wrapper.find('.vscroll').trigger('scroll')
+}
+
 const scrollOf = (wrapper: VueWrapper) =>
   (wrapper.find('.vscroll').element as HTMLElement).scrollTop
 const innerHeight = (wrapper: VueWrapper) =>
@@ -735,5 +746,170 @@ describe('VScroll · 两阶段跳转与 reset（动态模式）', () => {
     await nextTick()
     expect(scrollOf(wrapper)).toBe(0)
     expect(innerHeight(wrapper)).toContain('height: 4000px')
+  })
+})
+
+describe('VScroll · 钉底（stickToBottom）', () => {
+  /** 固定行高 50px、视口 200：100 行总高 5000，maxScroll 4800 */
+  function mountChat(overrides: Record<string, unknown> = {}) {
+    return mount(VScroll, {
+      props: { items, itemSize: 50, height: 200, overscan: 2, stickToBottom: true, ...overrides },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  it('starts at the bottom when mounted with items (chat history)', async () => {
+    const wrapper = mountChat()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4800)
+  })
+
+  it('keeps the view at the bottom when items are appended while pinned', async () => {
+    const wrapper = mountChat()
+    await userScrollTo(wrapper, 4800)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] }) // 110 行，max 5300
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(5300)
+    expect(wrapper.findAll('.row').at(-1)!.text()).toBe('item-109')
+  })
+
+  it('does not stick by default (opt-out)', async () => {
+    const wrapper = mountChat({ stickToBottom: false })
+    await userScrollTo(wrapper, 4800)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4800) // 视图留在原地，被新内容顶离底部
+  })
+
+  it('does not stick when the viewport is away from the bottom', async () => {
+    const wrapper = mountChat()
+    await userScrollTo(wrapper, 3000)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3000)
+  })
+
+  it('sticks at exactly the bottom tolerance boundary but not beyond', async () => {
+    const atEdge = mountChat()
+    await userScrollTo(atEdge, 4796) // 距底 4px = 底容差内
+    await atEdge.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(atEdge)).toBe(5300)
+
+    const beyond = mountChat()
+    await userScrollTo(beyond, 4795) // 距底 5px = 超出容差
+    await beyond.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(beyond)).toBe(4795)
+  })
+
+  it('releases after the user scrolls up and re-pins at the bottom', async () => {
+    const wrapper = mountChat()
+    await userScrollTo(wrapper, 4800)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] }) // 钉到 5300
+    await userScrollTo(wrapper, 4000) // 用户上滚 → 退出钉底
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 20)] }) // 120 行，max 5800
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4000) // 不再拉回底部
+    await userScrollTo(wrapper, 5800) // 滚回底部 → 恢复钉底
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 30)] }) // 130 行，max 6300
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(6300)
+  })
+
+  it('exits pinning after scrollToIndex jumps away', async () => {
+    const wrapper = mountChat()
+    await userScrollTo(wrapper, 4800)
+    vmScroll(wrapper).scrollToIndex(0)
+    await nextTick()
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(0) // 跳离后追加不拉回
+  })
+
+  it('exits pinning after reset()', async () => {
+    const wrapper = mountChat()
+    await userScrollTo(wrapper, 4800)
+    vmScroll(wrapper).reset()
+    await nextTick()
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(0)
+  })
+
+  it('treats an empty list as at-bottom: first arrival pins', async () => {
+    const wrapper = mountChat({ items: [] })
+    await nextTick()
+    await wrapper.setProps({ items: moreItems(0, 50) }) // 50 行，max 2300
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(2300)
+  })
+})
+
+describe('VScroll · 钉底（动态测量联动）', () => {
+  let raf: ReturnType<typeof stubRaf>
+
+  beforeEach(() => {
+    raf = stubRaf()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function mountDynamicChat(overrides: Record<string, unknown> = {}) {
+    return mount(VScroll, {
+      props: {
+        items,
+        height: 200,
+        overscan: 2,
+        resizeObserver: ROStubCtor,
+        stickToBottom: true,
+        ...overrides,
+      },
+      slots: { item: `<div class="row">{{ item.label }}</div>` },
+    })
+  }
+
+  it('re-sticks when appended rows measure taller than the estimate', async () => {
+    const wrapper = mountDynamicChat()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3800) // 初始贴底（纯估算：4000 - 200）
+    // 追加 10 行（估算 40px）：总高 4400，钉到 4200
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4200)
+    // 贴底窗口内的末行测出 100px（估算 40）：总高 4460，继续贴新底 4260
+    fireResize(109, 100)
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4260)
+  })
+
+  it('stays released when the user scrolled up before measurements land', async () => {
+    const wrapper = mountDynamicChat()
+    await nextTick()
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4200)
+    await userScrollTo(wrapper, 3000) // 用户上滚离开底容差
+    await nextTick() // 窗口移到 75 行附近
+    fireResize(75, 100) // 锚点行自身测量落地：不拉回底部
+    raf.flush()
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3000)
+  })
+
+  it('a bottom-landing jump clears the stale jump intent (no yank to old target)', async () => {
+    const wrapper = mountDynamicChat()
+    await nextTick()
+    vmScroll(wrapper).scrollToIndex(0) // 登记跳转意图 {0, start}
+    await nextTick()
+    vmScroll(wrapper).scrollToIndex(99, 'end') // 落点在底：钉底定位，应覆盖旧意图
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(3800)
+    await wrapper.setProps({ items: [...items, ...moreItems(100, 10)] })
+    await nextTick()
+    expect(scrollOf(wrapper)).toBe(4200) // 不被残留意图拽回 0
   })
 })

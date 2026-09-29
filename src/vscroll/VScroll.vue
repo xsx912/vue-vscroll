@@ -27,11 +27,17 @@ const props = withDefaults(
     intersectionObserver?: typeof IntersectionObserver
     /**
      * 注入 ResizeObserver 构造器（动态模式行测量/测试用），
-     * 缺省时使用全局 ResizeObserver，不存在则跳过测量（按估算高度渲染）
+     * 缺省时使用全局 ResizeObserver，不存在时跳过测量（按估算高度渲染）
      */
     resizeObserver?: typeof ResizeObserver
+    /**
+     * 钉底（ADR-0004，聊天场景）：已在底部（含底容差）时尾部追加内容仍贴底，
+     * 追加行测量落地也继续贴新底；用户上滚离开即退出，滚回恢复。
+     * 挂载时列表非空则初始定位到底部
+     */
+    stickToBottom?: boolean
   }>(),
-  { overscan: 5, loading: false },
+  { overscan: 5, loading: false, stickToBottom: false },
 )
 
 // 模式判定与开发告警（ADR-0001 双 prop 协议：itemSize 优先）
@@ -164,6 +170,7 @@ const { view, beginJump, cancelJump } = useVScroll({
   overscan: computed(() => props.overscan),
   scrollTop,
   viewportSize,
+  stickToBottom: computed(() => props.stickToBottom),
 })
 
 const sentinelEl = ref<HTMLElement | null>(null)
@@ -227,6 +234,11 @@ function measure() {
 
 onMounted(() => {
   measure()
+  // 钉底：挂载时已有内容（聊天历史）则初始定位到底部；
+  // 动态模式下这次跳转走两阶段，测量落地后自动贴到真实底部
+  if (props.stickToBottom && props.items.length > 0) {
+    scrollToIndex(props.items.length - 1, 'end')
+  }
   if (typeof ResizeObserver !== 'undefined' && props.height == null && containerEl.value) {
     containerObserver = new ResizeObserver(measure)
     containerObserver.observe(containerEl.value)

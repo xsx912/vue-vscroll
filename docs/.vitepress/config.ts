@@ -29,6 +29,7 @@ export default defineConfig({
           { text: '触底加载', link: '/examples/infinite' },
           { text: '已知变高', link: '/examples/variable-heights' },
           { text: '动态高度（测量）', link: '/examples/dynamic-measure' },
+          { text: '钉底（聊天场景）', link: '/examples/chat' },
         ],
       },
     ],

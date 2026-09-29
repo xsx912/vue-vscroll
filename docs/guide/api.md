@@ -16,6 +16,7 @@
 | `loading` | `boolean` | `false` | 为 true 时渲染底部 `loading` 插槽 |
 | `intersectionObserver` | `typeof IntersectionObserver` | 全局 | 注入 IntersectionObserver（测试/降级用） |
 | `resizeObserver` | `typeof ResizeObserver` | 全局 | 注入 ResizeObserver（动态模式行测量/测试用）；环境缺失时跳过测量、按估算渲染 |
+| `stickToBottom` | `boolean` | `false` | 钉底（ADR-0004，聊天场景）：已在底部（含底容差 4px）时尾部追加仍贴底，测量落地继续贴新底；上滚离开即退出，滚回恢复；挂载时列表非空则初始定位到底部 |
 
 ### Slots
 

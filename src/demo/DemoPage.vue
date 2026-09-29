@@ -26,6 +26,22 @@ const varItems = ref(Array.from({ length: 500 }, (_, i) => ({ id: i, label: `卡
 const varEl = ref<VScrollExpose | null>(null)
 const sizeAt = (index: number) => 40 + ((index * 53) % 101)
 const heightClass = (index: number) => (sizeAt(index) > 90 ? 'card-tall' : 'card-short')
+
+// 钉底：动态高度聊天——追加消息贴底，测量落地继续贴新底；上滚读历史不打扰
+const chatItems = ref(
+  Array.from({ length: 60 }, (_, i) => ({
+    id: i,
+    self: i % 3 === 0,
+    lines: 1 + ((i * 7) % 3),
+    text: `消息 ${i}`,
+  })),
+)
+const chatEl = ref<VScrollExpose | null>(null)
+let chatTail = 60
+function receiveMessage() {
+  const n = chatTail++
+  chatItems.value.push({ id: n, self: n % 3 === 0, lines: 1 + ((n * 7) % 3), text: `消息 ${n}` })
+}
 </script>
 
 <template>
@@ -90,6 +106,28 @@ const heightClass = (index: number) => (sizeAt(index) > 90 ? 'card-tall' : 'card
       </template>
       <template #empty>
         <div class="list-empty">没有数据</div>
+      </template>
+    </VScroll>
+
+    <h2>钉底示例（stickToBottom · 聊天场景）</h2>
+    <p class="tip">动态测量 + 钉底联动：贴底时点「收到新消息」仍贴底（行高测出后继续贴新底）；上滚读历史则不打扰，滚回底部恢复</p>
+    <div class="actions">
+      <button @click="receiveMessage">收到新消息</button>
+      <button @click="chatEl?.scrollToIndex(0)">回顶部读历史</button>
+    </div>
+    <VScroll
+      ref="chatEl"
+      class="demo-list chat-list"
+      :items="chatItems"
+      :estimated-item-size="48"
+      :height="360"
+      :overscan="4"
+      stick-to-bottom
+    >
+      <template #item="{ item }">
+        <div class="chat-row" :class="{ self: item.self }">
+          <p v-for="n in item.lines" :key="n">{{ item.text }} · 第 {{ n }} 行</p>
+        </div>
       </template>
     </VScroll>
   </div>
@@ -161,5 +199,30 @@ const heightClass = (index: number) => (sizeAt(index) > 90 ? 'card-tall' : 'card
 }
 .card-short {
   background: #fff;
+}
+.chat-list {
+  background: #fafbfc;
+}
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  max-width: 72%;
+  margin: 4px 12px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #ececec;
+  box-sizing: border-box;
+}
+.chat-row.self {
+  margin-left: auto;
+  background: #edfbf3;
+  border-color: #d9f2e5;
+}
+.chat-row p {
+  margin: 0 0 2px;
+  font-size: 13px;
+  line-height: 20px;
+  color: #333;
 }
 </style>

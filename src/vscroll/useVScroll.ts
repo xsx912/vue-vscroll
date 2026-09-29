@@ -25,6 +25,8 @@ export interface UseVScrollOptions {
   estimatedItemSize?: number
   /** 动态模式的测量缓存（索引键 → 真实行高）；由组件持有，reset() 清空 */
   measurements?: Ref<Measurements>
+  /** 钉底（ADR-0004 opt-in）：变化前已在底部（含底容差）则贴新底 */
+  stickToBottom?: Ref<boolean>
   /** 视口外缓冲行数 */
   overscan: Ref<number>
   /** 滚动偏移（px），由滚动容器喂入 */
@@ -55,6 +57,23 @@ const EMPTY_MEASUREMENTS: Measurements = new Map()
 
 /** 两阶段跳转的修正次数上界（CONTEXT.md：有界，不无限循环） */
 const MAX_JUMP_CORRECTIONS = 2
+
+/** 钉底的底容差（px）：距底不超过该值视为"在底部"，吸收行高小数与滚动取整 */
+const BOTTOM_TOLERANCE = 4
+
+/**
+ * 最大滚动位置：总高 − 视口（不小于 0）。
+ */
+function maxScrollOf(offsets: readonly number[], viewport: number): number {
+  return Math.max(0, offsets[offsets.length - 1] - viewport)
+}
+
+/**
+ * 是否"在底部"：距底不超过底容差（吸收行高小数与滚动取整）。
+ */
+function isAtBottom(maxScroll: number, scrollTop: number): boolean {
+  return maxScroll - scrollTop <= BOTTOM_TOLERANCE
+}
 
 /**
  * 虚拟滚动的核心状态机（不触碰 DOM，便于测试与 v2 复用）：
@@ -131,15 +150,23 @@ export function useVScroll(opts: UseVScrollOptions) {
       }
       return
     }
+    // 钉底（ADR-0004）：变化前已在底部（含底容差）→ 贴新底。无状态判定——
+    // 追加、测量落地、删减皆然；用户上滚离开底容差自然退出，滚回恢复。
+    if (
+      opts.stickToBottom?.value &&
+      isAtBottom(maxScrollOf(oldOffsets, opts.viewportSize.value), opts.scrollTop.value)
+    ) {
+      opts.scrollTop.value = maxScrollOf(newOffsets, opts.viewportSize.value)
+      return
+    }
     const first = findStartIndex(oldOffsets, opts.scrollTop.value)
     if (first >= newOffsets.length - 1) {
-      const maxScroll = Math.max(0, newOffsets[newOffsets.length - 1] - opts.viewportSize.value)
-      opts.scrollTop.value = Math.min(opts.scrollTop.value, maxScroll)
+      opts.scrollTop.value = Math.min(opts.scrollTop.value, maxScrollOf(newOffsets, opts.viewportSize.value))
       return
     }
     const delta = newOffsets[first] - (oldOffsets[first] ?? 0)
     if (delta !== 0) {
-      const maxScroll = Math.max(0, newOffsets[newOffsets.length - 1] - opts.viewportSize.value)
+      const maxScroll = maxScrollOf(newOffsets, opts.viewportSize.value)
       opts.scrollTop.value = Math.min(Math.max(0, opts.scrollTop.value + delta), maxScroll)
     }
   })
@@ -147,12 +174,22 @@ export function useVScroll(opts: UseVScrollOptions) {
   /**
    * 两阶段跳转第一阶段：登记跳转意图并返回估算落点（组件直接应用）。
    * 仅动态模式登记；固定/已知变高偏移确定，等价于 getOffsetForIndex 一步到位。
+   * 钉底模式下落点已在底部（含底容差）时不登记：底部定位归钉底（无状态跟底），
+   * 同时清掉旧的跳转意图——残留的 pendingJump 会在下次 offsets 变化时把视图拽走。
    */
   function beginJump(index: number, align: Align): number {
+    const target = getOffsetForIndex(index, align)
     if (opts.itemSize == null) {
-      pendingJump = { index, align, remaining: MAX_JUMP_CORRECTIONS }
+      if (
+        opts.stickToBottom?.value &&
+        isAtBottom(maxScrollOf(offsets.value, opts.viewportSize.value), target)
+      ) {
+        pendingJump = null
+      } else {
+        pendingJump = { index, align, remaining: MAX_JUMP_CORRECTIONS }
+      }
     }
-    return getOffsetForIndex(index, align)
+    return target
   }
 
   /** 放弃等待中的跳转修正（reset，或用户手动滚离目标位置） */
@@ -168,7 +205,7 @@ export function useVScroll(opts: UseVScrollOptions) {
     const top = offsets.value[clamped] ?? 0
     const size = sizeAt(clamped)
     const viewport = opts.viewportSize.value
-    const max = Math.max(0, (offsets.value[n] ?? 0) - viewport)
+    const max = maxScrollOf(offsets.value, viewport)
     const target =
       align === 'start' ? top : align === 'center' ? top - (viewport - size) / 2 : top + size - viewport
     return Math.min(Math.max(0, target), max)
